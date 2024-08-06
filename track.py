@@ -27,10 +27,43 @@ class Tracker:
         return dt.strftime("%Y-%m-%d %H:%M")
 
     @classmethod
-    def format_td(cls, td: timedelta) -> str:
+    def td2seconds(cls, td: timedelta) -> str:
         if not isinstance(td, timedelta):
             return ""
         return f"{round(td.total_seconds())}"
+
+    @classmethod
+    def format_td(cls, td: timedelta):
+        if not isinstance(td, timedelta):
+            return None
+        total_seconds = int(td.total_seconds())
+        if total_seconds == 0:
+            return ' 0 minutes '
+        total_seconds = abs(total_seconds)
+        try:
+            until = []
+            days = hours = minutes = 0
+            if total_seconds:
+                minutes = total_seconds // 60
+                if minutes >= 60:
+                    hours = minutes // 60
+                    minutes = minutes % 60
+                if hours >= 24:
+                    days = hours // 24
+                    hours = hours % 24
+            if days:
+                until.append(f'{days} days')
+            if hours:
+                until.append(f'{hours} hours')
+            if minutes:
+                until.append(f'{minutes} minutes')
+            if not until:
+                until.append('0 minuutes')
+            ret = ' '.join(until)
+            return ret
+        except Exception as e:
+            print(f'{td}: {e}')
+            return ''
 
 
     @classmethod
@@ -91,15 +124,21 @@ class Tracker:
     def get_tracker_data(self):
         return f"""{self.name}
        completion intervals: {self.history[0]}
-       average interval: {str(self.history[1])}
-       last interval: {str(self.last_interval)}
+       average interval: {Tracker.format_td(self.history[1])}
+       last interval: {Tracker.format_td(self.last_interval)}
        last completion: {Tracker.format_dt(self.last_completion)}
        next expected completion: {Tracker.format_dt(self.next_expected_completion)}"""
+
+    # def get_tracker_data(self):
+    #     return f"""{self.name}
+    #    average interval {str(self.history[1])} based on {self.history[0]} intervals
+    #    last completed {Tracker.format_dt(self.last_completion)} after {str(self.last_interval)}
+    #    next completion expected at {Tracker.format_dt(self.next_expected_completion)}"""
 
 class TrackerManager:
     def __init__(self, file_path=None) -> None:
         if file_path is None:
-            file_path = os.path.join(os.path.dirname(__file__), "tracker.json")
+            file_path = os.path.join(os.getcwd(), "tracker.json")
         self.file_path = file_path
         self.trackers = {}
         self.load_data(self.file_path)
@@ -139,12 +178,12 @@ class TrackerManager:
         data = {doc_id: {
                     'name': tracker.name,
                     'last_completion': Tracker.format_dt(tracker.last_completion),
-                    'last_interval': Tracker.format_td(tracker.last_interval),
+                    'last_interval': Tracker.td2seconds(tracker.last_interval),
                     'next_expected_completion': Tracker.format_dt(tracker.next_expected_completion),
-                    'history': [tracker.history[0], Tracker.format_td(tracker.history[1]), Tracker.format_dt(tracker.history[2])]
+                    'history': [tracker.history[0], Tracker.td2seconds(tracker.history[1]), Tracker.format_dt(tracker.history[2])]
                 } for doc_id, tracker in self.trackers.items()}
         with open(file_path, 'w') as file:
-            json.dump(data, file)
+            json.dump(data, file, indent=2)
 
     def load_data(self, file_path):
         try:
@@ -187,7 +226,13 @@ class TrackerManager:
         return self.trackers.get(doc_id, None)
 
 def main():
-    tracker_manager = TrackerManager()
+    file_path = os.path.join(os.getcwd(), "tracker.json")
+    if not os.path.exists(file_path):
+        print(f"Warning: '{file_path}' does not exist and will be created.")
+        ok = input("Continue? (y/n) ").strip().lower() == 'y'
+        if not ok:
+            sys.exit("Aborted.")
+    tracker_manager = TrackerManager(file_path)
     tracker_manager.list_trackers()
     last_id = None
     clear_screen()
