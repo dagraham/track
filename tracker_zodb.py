@@ -1,22 +1,23 @@
 #! /usr/bin/env python3
-# NOTE: Tracker and TrackerManager Classes
 from prompt_toolkit import prompt
 from prompt_toolkit.validation import Validator, ValidationError
 import re
 from typing import List, Dict, Any, Callable, Mapping
 from collections import defaultdict
-import json
-import os
 from datetime import datetime, timedelta
 from dateutil.parser import parse, parserinfo
 import traceback
 import sys
+from ZODB import DB, FileStorage
+from persistent import Persistent
+import transaction
+import os
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 
-class Tracker:
+class Tracker(Persistent):
     _next_id = 1
     max_history = 10
 
@@ -98,15 +99,14 @@ class Tracker:
         self.history = []
 
     def record_completion(self, completion_dt: datetime):
-        # completion_dt will be a valid datetime
         ok, msg = True, ""
         needs_sorting = False
         if self.history and self.history[-1] >= completion_dt:
             print(f"""\
-    The new completion datetime
-        {completion_dt}
-    is earlier than the previous completion datetime
-        {self.history[-1]}.""")
+        The new completion datetime
+            {completion_dt}
+        is earlier than the previous completion datetime
+            {self.history[-1]}.""")
             res = input("Is this what you wanted? (y/N): ").strip()
             if res.lower() not in ['y', 'yes']:
                 return False, "aborted"
@@ -118,7 +118,11 @@ class Tracker:
         if len(self.history) > Tracker.max_history:
             self.history = self.history[-Tracker.max_history:]
 
+        # Notify ZODB that this object has changed
+        self._p_changed = True
+
         return True, f"recorded completion for {completion_dt}"
+
 
     def get_tracker_data(self):
         last_completion = self.history[-1] if len(self.history) > 0 else None
@@ -143,22 +147,25 @@ class Tracker:
         completions ({len(self.history)}):
             last: {Tracker.format_dt(last_completion)}
             next: {Tracker.format_dt(next_expected_completion)}
-       """
+        """
 
 class TrackerManager:
-    def __init__(self, file_path=None) -> None:
-        if file_path is None:
-            file_path = os.path.join(os.getcwd(), "tracker.json")
-        self.file_path = file_path
+    def __init__(self, db_path=None) -> None:
+        if db_path is None:
+            db_path = os.path.join(os.getcwd(), "tracker.fs")
+        self.db_path = db_path
         self.trackers = {}
-        print(f"loading data from {self.file_path}")
-        self.load_data(self.file_path)
+        self.storage = FileStorage.FileStorage(self.db_path)
+        self.db = DB(self.storage)
+        self.connection = self.db.open()
+        self.root = self.connection.root()
+        print(f"loading data from {self.db_path}")
+        self.load_data()
 
     def add_tracker(self, tracker) -> None:
         doc_id = tracker.doc_id
-        print(f"adding tracker {doc_id}; {type(doc_id) = }")
         self.trackers[doc_id] = tracker
-        self.save_data(self.file_path)
+        self.save_data()
 
     def record_completion(self, doc_id: int, dt: datetime):
         # dt will be a datetime
@@ -167,7 +174,7 @@ class TrackerManager:
             print(msg)
             return
 
-        self.save_data(self.file_path)
+        self.save_data()
         print(f"""\
     {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_data()}""")
 
@@ -184,143 +191,126 @@ class TrackerManager:
     def list_trackers(self):
         print(f"all trackers:")
         for k, v in self.trackers.items():
-            # print(f"{k}. {v}")
             print(f"   {int(k):2> }. {v.name}")
 
-    def save_data(self, file_path):
-        data = {int(doc_id): {
-                    'name': tracker.name,
-                    'history': [Tracker.format_dt(dt) for dt in tracker.history],
-                } for doc_id, tracker in self.trackers.items()}
-        with open(file_path, 'w') as file:
-            json.dump(data, file, indent=2)
+    def save_data(self):
+        self.root['trackers'] = self.trackers
+        transaction.commit()
 
-    def load_data(self, file_path):
+    def load_data(self):
         try:
-            with open(file_path, 'r') as file:
-                data = json.load(file)
-                _max_id = 0
-                for doc_id, tracker_data in data.items():
-                    doc_id = int(doc_id)
-                    _max_id = max(doc_id, _max_id)
-                    tracker = Tracker(tracker_data['name'], doc_id)
-                    tracker.history = [Tracker.parse_dt(dt) for dt in tracker_data['history']]
-                    self.trackers[doc_id] = tracker
+            self.trackers = self.root.get('trackers', {})
+            if self.trackers:
+                _max_id = max(self.trackers.keys())
                 Tracker._next_id = _max_id + 1
-        except FileNotFoundError:
-            print(f"Warning: could not load data from '{file_path}'")
+        except Exception as e:
+            print(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
-
-    @staticmethod
-    def parse_timedelta(td_str):
-        if not td_str:
-            return None
-        else:
-            total_seconds = int(td_str)
-            return timedelta(seconds=total_seconds)
 
     def update_tracker(self, doc_id, tracker):
         self.trackers[doc_id] = tracker
-        self.save_data(self.file_path)
+        self.save_data()
 
     def delete_tracker(self, doc_id):
         if doc_id in self.trackers:
             del self.trackers[doc_id]
-            self.save_data(self.file_path)
+            self.save_data()
 
     def get_tracker(self, doc_id):
         return self.trackers.get(doc_id, None)
 
+    def close(self):
+        self.connection.close()
+        self.db.close()
+        self.storage.close()
+
 def main():
-    file_path = os.path.join(os.getcwd(), "tracker.json")
-    if not os.path.exists(file_path):
-        print(f"Warning: '{file_path}' does not exist and will be created.")
-        ok = input("Continue? (y/n) ").strip().lower() == 'y'
-        if not ok:
-            sys.exit("Aborted.")
-    tracker_manager = TrackerManager(file_path)
+    db_path = os.path.join(os.getcwd(), "tracker.fs")
+    tracker_manager = TrackerManager(db_path)
     tracker_manager.list_trackers()
     last_id = None
     clear_screen()
 
-    while True:
-        print("Menu:")
-        print("    a) add tracker")
-        print("    d) delete tracker")
-        print("    l) list trackers")
-        print("    r) record completion")
-        print("    s) show tracker info")
-        print("    c) clear screen")
-        print("    q) quit")
+    try:
+        while True:
+            print("Menu:")
+            print("    a) add tracker")
+            print("    d) delete tracker")
+            print("    l) list trackers")
+            print("    r) record completion")
+            print("    s) show tracker info")
+            print("    c) clear screen")
+            print("    q) quit")
 
-        choice = input("Choose an option: ").strip().lower()
+            choice = input("Choose an option: ").strip().lower()
 
-        if choice == 'a':
-            name = input("Enter tracker name: ").strip()
-            new_tracker = Tracker(name)
-            tracker_manager.add_tracker(new_tracker)
-            print(f"{type(new_tracker.doc_id) = }")
-            last_id = new_tracker.doc_id
-            print(f"Tracker '{name}' added with ID {new_tracker.doc_id}")
+            if choice == 'a':
+                name = input("Enter tracker name: ").strip()
+                new_tracker = Tracker(name)
+                tracker_manager.add_tracker(new_tracker)
+                print(f"{type(new_tracker.doc_id) = }")
+                last_id = new_tracker.doc_id
+                print(f"Tracker '{name}' added with ID {new_tracker.doc_id}")
 
-        elif choice == 'd':
-            try:
-                doc_id_input = input(f"Enter tracker ID to delete [{last_id}]: ").strip()
-                doc_id = int(doc_id_input) if doc_id_input else last_id
-                if doc_id is not None:
-                    tracker_manager.delete_tracker(doc_id)
-                    print(f"Tracker with ID {doc_id} deleted")
-                else:
-                    print("No ID provided.")
-            except ValueError:
-                print("Invalid ID. Please enter a numeric value.")
-
-        elif choice == 'l':
-            tracker_manager.list_trackers()
-
-        elif choice == 'r':
-            tracker_manager.list_trackers()
-            try:
-                doc_id_input = input(f"Enter tracker ID [{last_id}]: ").strip()
-                doc_id = int(doc_id_input) if doc_id_input else last_id
-                if doc_id is not None:
-                    last_id = doc_id
-                    dt_str = input(f"Enter completion datetime for {doc_id}: ").strip()
-                    dt = Tracker.parse_dt(dt_str)
-                    if dt:
-                        tracker_manager.record_completion(doc_id, dt)
+            elif choice == 'd':
+                try:
+                    doc_id_input = input(f"Enter tracker ID to delete [{last_id}]: ").strip()
+                    doc_id = int(doc_id_input) if doc_id_input else last_id
+                    if doc_id is not None:
+                        tracker_manager.delete_tracker(doc_id)
+                        print(f"Tracker with ID {doc_id} deleted")
                     else:
-                        print("Invalid datetime format. Please try again.")
-                else:
-                    print("No ID provided.")
-            except ValueError:
-                print("Invalid ID. Please enter a numeric value.")
+                        print("No ID provided.")
+                except ValueError:
+                    print("Invalid ID. Please enter a numeric value.")
 
-        elif choice == 's':
-            try:
-                doc_id_input = input(f"Enter tracker ID (or 0 for all) [{last_id}]: ").strip()
-                doc_id = int(doc_id_input) if doc_id_input else last_id
-                if doc_id is not None:
-                    if doc_id == 0:
-                        tracker_manager.get_tracker_data()
-                    else:
+            elif choice == 'l':
+                tracker_manager.list_trackers()
+
+            elif choice == 'r':
+                tracker_manager.list_trackers()
+                try:
+                    doc_id_input = input(f"Enter tracker ID [{last_id}]: ").strip()
+                    doc_id = int(doc_id_input) if doc_id_input else last_id
+                    if doc_id is not None:
                         last_id = doc_id
-                        tracker_manager.get_tracker_data(doc_id)
-                else:
-                    print("No ID provided.")
-            except ValueError:
-                print("Invalid ID. Please enter a numeric value.")
+                        dt_str = input(f"Enter completion datetime for {doc_id}: ").strip()
+                        dt = Tracker.parse_dt(dt_str)
+                        if dt:
+                            tracker_manager.record_completion(doc_id, dt)
+                        else:
+                            print("Invalid datetime format. Please try again.")
+                    else:
+                        print("No ID provided.")
+                except ValueError:
+                    print("Invalid ID. Please enter a numeric value.")
 
-        elif choice == 'c':
-            clear_screen()
+            elif choice == 's':
+                try:
+                    doc_id_input = input(f"Enter tracker ID (or 0 for all) [{last_id}]: ").strip()
+                    doc_id = int(doc_id_input) if doc_id_input else last_id
+                    if doc_id is not None:
+                        if doc_id == 0:
+                            tracker_manager.get_tracker_data()
+                        else:
+                            last_id = doc_id
+                            tracker_manager.get_tracker_data(doc_id)
+                    else:
+                        print("No ID provided.")
+                except ValueError:
+                    print("Invalid ID. Please enter a numeric value.")
 
-        elif choice == 'q':
-            print("Quitting...")
-            sys.exit()
+            elif choice == 'c':
+                clear_screen()
 
-        else:
-            print("Invalid option. Please choose again.")
+            elif choice == 'q':
+                print("Quitting...")
+                break
+
+            else:
+                print("Invalid option. Please choose again.")
+    finally:
+        tracker_manager.close()
 
 if __name__ == "__main__":
     main()
-
