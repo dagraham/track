@@ -336,7 +336,7 @@ def update_status(new_message):
     status_control.text = new_message
     app.invalidate()  # Request a UI refresh
 
-# Application Setup
+# UI Setup
 
 def start_periodic_checks():
     """Start the periodic check for alarms in a separate thread."""
@@ -361,8 +361,6 @@ input_visible = [False]
 action = [None]
 
 # Tracker mapping example
-trackers = {char: i+1 for i, char in enumerate(string.ascii_lowercase[:10])}
-
 # UI Components
 menu_text = "track  a)dd  d)elete  e)dit  i)nfo  r)ecord  ^q)uit "
 menu_container = Window(content=FormattedTextControl(text=menu_text), height=1, style="class:menu-bar")
@@ -373,8 +371,56 @@ search_field = SearchToolbar(
     ],
     ignore_case=True,
     )
+button = "  ⏺️"
+label = " ▶️"
+tag = "  🏷"
+box = "■" # 0x2588
+line_char = "━"
+indent = "   "
 
-display_text = " key tracker\n --- -----------------\n" + "\n".join([f"  {k}. Tracker {v}" for k, v in trackers.items()])
+BEF = '\u200B'
+AFT = '\u00A0'
+NON_BREAKING_HYPHEN = '\u2011'
+
+# display_text = f"""\
+# Trackers
+# {indent}{box}  name
+# {indent}{line_char}  {line_char*30}
+# """
+display_text = f"""\
+Trackers{BEF}{AFT}{NON_BREAKING_HYPHEN}
+"""
+
+# display_text = "Trackers\n"
+
+trackers = {
+    1: "fill birdfeeders",
+    3: "fill water dispenser",
+    5: "fill cat food dispenser",
+    7: "fill dog food dispenser",
+    9: "get haircut"
+}
+
+# trackers = {char: i+1 for i, char in enumerate(string.ascii_lowercase[:26])}
+list_labels = [char for i, char in enumerate(string.ascii_lowercase)]
+tracker_list = []
+label_to_id = {}
+index = 0
+for k, v in trackers.items():
+    label = list_labels[index]
+    label_to_id[label] = k
+    index += 1
+    # NOTE: use BEF for trackers with next <= today + oneday
+    if index <= 3:
+        pre = BEF
+    else:
+        pre = ""
+    tracker_list.append(f"{pre}{indent}{label}  {v} [{k}]")
+
+
+display_text += "\n".join(tracker_list)
+
+# display_text +=  "\n".join([f"{indent}{list_labels[k]}  Tracker {v}" for k, v in trackers.items()])
 
 display_area = TextArea(text=display_text, read_only=True, search_field=search_field, style="class:display-area")
 
@@ -489,7 +535,7 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
 def main():
     tracker_manager = None
     try:
-        db_file = "/Users/dag/tracker-dgraham/tracker.fs"
+        db_file = "/Users/dag/track-dgraham/tracker.fs"
         tracker_manager = TrackerManager(db_file)
 
         start_periodic_checks()  # Start the periodic checks
