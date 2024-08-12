@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 from typing import List, Dict, Any, Callable, Mapping
 from prompt_toolkit import Application
 from prompt_toolkit.layout import Layout, HSplit
@@ -203,7 +204,7 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        print(f"Opened tracker manager using data from\n  {self.db_path}")
+        print(f"opened tracker manager using data from\n  {self.db_path}")
         self.load_data()
 
     def add_tracker(self, name: str) -> None:
@@ -298,10 +299,10 @@ def format_statustime(obj, freq: int = 0):
         if ampm
         else obj.strftime(' %H:%M')
     ) + dots
-    if width < 50:
+    if width < 25:
         weekday = ''
         monthday = ''
-    elif width < 60:
+    elif width < 30:
         weekday = f' {obj.strftime("%a")}'
         monthday = ''
     else:
@@ -350,7 +351,7 @@ def center_text(text):
     right_padding = total_padding - left_padding
     return ' ' * left_padding + text + ' ' * right_padding
 
-all_trackers = center_text('All Trackers')
+# all_trackers = center_text('All Trackers')
 
 # Menu and Mode Control
 menu_mode = [True]
@@ -373,7 +374,7 @@ search_field = SearchToolbar(
     ignore_case=True,
     )
 
-display_text = "all trackers:\n" + "\n".join([f"  {k}. Tracker {v}" for k, v in trackers.items()])
+display_text = " key tracker\n --- -----------------\n" + "\n".join([f"  {k}. Tracker {v}" for k, v in trackers.items()])
 
 display_area = TextArea(text=display_text, read_only=True, search_field=search_field, style="class:display-area")
 
@@ -419,6 +420,8 @@ layout = Layout(root_container)
 # Application Setup
 kb = KeyBindings()
 
+key_msg = "Press the key for the tracker to"
+
 @kb.add('c-q')
 def exit_app(event):
     """Exit the application."""
@@ -449,7 +452,7 @@ def delete_tracker(event):
     select_mode[0] = True
     dialog_visible[0] = True
     input_visible[0] = False
-    message_control.text = "Press the key corresponding to the tracker to delete."
+    message_control.text = f"{key_msg} delete."
 
 @kb.add('e', filter=Condition(lambda: menu_mode[0]))
 def edit_tracker(event):
@@ -459,7 +462,7 @@ def edit_tracker(event):
     select_mode[0] = True
     dialog_visible[0] = True
     input_visible[0] = False
-    message_control.text = "Press the key corresponding to the tracker to edit."
+    message_control.text = f"{key_msg} edit."
 
 def select_tracker(event, key):
     """Generic tracker selection."""
@@ -484,15 +487,23 @@ for key in string.ascii_lowercase:
 app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
 
 def main():
+    tracker_manager = None
     try:
-        tracker_manager = TrackerManager("/Users/dag/tracker-dgraham/tracker.fs")
+        db_file = "/Users/dag/tracker-dgraham/tracker.fs"
+        tracker_manager = TrackerManager(db_file)
 
         start_periodic_checks()  # Start the periodic checks
         app.run()
+    except Exception as e:
+        print(f"exception raised:\n{e}")
+    else:
+        print("exited tracker", end="")
     finally:
         if tracker_manager:
             tracker_manager.close()
-            print("Closed tracker manager")
+            print(f" and closed\n  {db_file}")
+        else:
+            print("")
 
 if __name__ == "__main__":
     main()
