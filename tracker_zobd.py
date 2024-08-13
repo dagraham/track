@@ -270,7 +270,7 @@ class Tracker(Persistent):
         wrapped_history = wrap(', '.join(x.strftime('%Y-%m-%d %H:%M') for x in self.history))
 
         return f"""\
- {self.name}
+ {self.name} [#{self.doc_id}]
     completions ({len(self.history)}):
         last: {Tracker.format_dt(last_completion)}
         next: {Tracker.format_dt(next_expected_completion)}
@@ -280,9 +280,7 @@ class Tracker(Persistent):
         change: {Tracker.format_td(change)}
     history:
         {wrapped_history}
-
- id: {self.doc_id}
-        """
+    """
 
 class TrackerManager:
     labels = [char for i, char in enumerate(string.ascii_lowercase)]
@@ -777,7 +775,7 @@ root_container = MenuContainer(
 layout = Layout(root_container)
 # app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
 
-app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
+app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_support=True, style=style)
 
 app.layout.focus(root_container.body)
 
