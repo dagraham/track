@@ -5,11 +5,16 @@ from prompt_toolkit.layout import Layout, HSplit
 from prompt_toolkit.layout.containers import Window, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.widgets import TextArea, HorizontalLine, SearchToolbar
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.styles import Style
 from prompt_toolkit.styles.named_colors import NAMED_COLORS
 from datetime import datetime, timedelta, date
+from prompt_toolkit.widgets import (
+    TextArea,
+    SearchToolbar,
+    MenuContainer,
+    MenuItem,
+)
 import string
 import shutil
 import threading
@@ -20,6 +25,81 @@ from persistent import Persistent
 import transaction
 import os
 import time
+
+import textwrap
+import shutil
+import re
+
+# Non-printing character
+NON_PRINTING_CHAR = '\u200B'
+# Placeholder for spaces within special tokens
+PLACEHOLDER = '\u00A0'
+# Placeholder for hyphens to prevent word breaks
+NON_BREAKING_HYPHEN = '\u2011'
+
+def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 3):
+    # Preprocess to replace spaces within specific "@\S" patterns with PLACEHOLDER
+    text = preprocess_text(text)
+
+    # Split text into paragraphs
+    paragraphs = text.split('\n')
+
+    # Wrap each paragraph
+    wrapped_paragraphs = []
+    for para in paragraphs:
+        leading_whitespace = re.match(r'^\s*', para).group()
+        initial_indent = leading_whitespace
+
+        # Determine subsequent_indent based on the first non-whitespace character
+        stripped_para = para.lstrip()
+        if stripped_para.startswith(('+', '-', '*', '%', '!', '~')):
+            subsequent_indent = initial_indent + ' ' * 2
+        elif stripped_para.startswith(('@', '&')):
+            subsequent_indent = initial_indent + ' ' * 3
+        else:
+            subsequent_indent = initial_indent + ' ' * indent
+
+        wrapped = textwrap.fill(
+            para,
+            initial_indent='',
+            subsequent_indent=subsequent_indent,
+            width=width)
+        wrapped_paragraphs.append(wrapped)
+
+    # Join paragraphs with newline followed by non-printing character
+    wrapped_text = ('\n' + NON_PRINTING_CHAR).join(wrapped_paragraphs)
+
+    # Postprocess to replace PLACEHOLDER and NON_BREAKING_HYPHEN back with spaces and hyphens
+    wrapped_text = postprocess_text(wrapped_text)
+
+    return wrapped_text
+
+def preprocess_text(text):
+    # Regex to find "@\S" patterns and replace spaces within the pattern with PLACEHOLDER
+    text = re.sub(r'(@\S+\s\S+)', lambda m: m.group(0).replace(' ', PLACEHOLDER), text)
+    # Replace hyphens within words with NON_BREAKING_HYPHEN
+    text = re.sub(r'(\S)-(\S)', lambda m: m.group(1) + NON_BREAKING_HYPHEN + m.group(2), text)
+    return text
+
+def postprocess_text(text):
+    text = text.replace(PLACEHOLDER, ' ')
+    text = text.replace(NON_BREAKING_HYPHEN, '-')
+    return text
+
+def unwrap(wrapped_text):
+    # Split wrapped text into paragraphs
+    paragraphs = wrapped_text.split('\n' + NON_PRINTING_CHAR)
+
+    # Replace newlines followed by spaces in each paragraph with a single space
+    unwrapped_paragraphs = []
+    for para in paragraphs:
+        unwrapped = re.sub(r'\n\s*', ' ', para)
+        unwrapped_paragraphs.append(unwrapped)
+
+    # Join paragraphs with original newlines
+    unwrapped_text = '\n'.join(unwrapped_paragraphs)
+
+    return unwrapped_text
 
 # Tracker and TrackerManager classes here?
 class Tracker(Persistent):
@@ -169,7 +249,7 @@ class Tracker(Persistent):
         except ValueError:
             print("Invalid input. Please enter a number.")
 
-    def get_tracker_data(self):
+    def get_tracker_info(self):
         last_completion = self.history[-1] if len(self.history) > 0 else None
         if len(self.history) > 1:
             intervals = [self.history[i+1] - self.history[i] for i in range(len(self.history) - 1)]
@@ -183,23 +263,29 @@ class Tracker(Persistent):
             num_intervals = 0
             change = average_interval = last_interval = timedelta(minutes=0)
             next_expected_completion = None
+        wrapped_history = wrap(', '.join(x.strftime('%Y-%m-%d %H:%M') for x in self.history))
 
         return f"""{self.name}
-        completions ({len(self.history)}):
-            last: {Tracker.format_dt(last_completion)}
-            next: {Tracker.format_dt(next_expected_completion)}
-        intervals ({len(intervals)}):
-            average: {Tracker.format_td(average_interval)}
-            last: {Tracker.format_td(last_interval)}
-            change: {Tracker.format_td(change)}
+    completions ({len(self.history)}):
+        last: {Tracker.format_dt(last_completion)}
+        next: {Tracker.format_dt(next_expected_completion)}
+    intervals ({len(intervals)}):
+        average: {Tracker.format_td(average_interval)}
+        last: {Tracker.format_td(last_interval)}
+        change: {Tracker.format_td(change)}
+    history:
+        {wrapped_history}
         """
 
 class TrackerManager:
+    labels = [char for i, char in enumerate(string.ascii_lowercase)]
+
     def __init__(self, db_path=None) -> None:
         if db_path is None:
             db_path = os.path.join(os.getcwd(), "tracker.fs")
         self.db_path = db_path
         self.trackers = {}
+        self.label_to_id = {}
         self.storage = FileStorage.FileStorage(self.db_path)
         self.db = DB(self.storage)
         self.connection = self.db.open()
@@ -237,9 +323,19 @@ class TrackerManager:
             print(f"   {doc_id:2> }. {self.trackers[doc_id].get_tracker_data()}")
 
     def list_trackers(self):
-        print(f"all trackers:")
+        rows = [f"Tracker List"]
+        count = 0
         for k, v in self.trackers.items():
-            print(f"   {int(k):2> }. {v.name}")
+            label = TrackerManager.labels[count]
+            self.label_to_id[label] = k
+            count += 1
+            rows.append(f"   {label} {v.name}")
+        return "\n".join(rows)
+
+    def get_tracker_from_label(self, label: str):
+        if label not in self.label_to_id:
+            return None
+        return self.trackers[self.label_to_id[label]]
 
     def save_data(self):
         self.root['trackers'] = self.trackers
@@ -266,15 +362,15 @@ class TrackerManager:
             del self.trackers[doc_id]
             self.save_data()
 
-    def edit_tracker_history(self, doc_id):
-        tracker = self.get_tracker(doc_id)
+    def edit_tracker_history(self, label: str):
+        tracker = self.get_tracker_from_label(label)
         if tracker:
             tracker.edit_history()
             self.save_data()
         else:
             print(f"No tracker found with ID {doc_id}.")
 
-    def get_tracker(self, doc_id):
+    def get_tracker_from_id(self, doc_id):
         return self.trackers.get(doc_id, None)
 
     def close(self):
@@ -362,7 +458,7 @@ action = [None]
 
 # Tracker mapping example
 # UI Components
-menu_text = "track  a)dd  d)elete  e)dit  i)nfo  r)ecord  ^q)uit "
+menu_text = "menu  a)dd d)elete e)dit i)nfo l)ist r)ecord s)how ^q)uit"
 menu_container = Window(content=FormattedTextControl(text=menu_text), height=1, style="class:menu-bar")
 
 search_field = SearchToolbar(
@@ -378,9 +474,8 @@ box = "■" # 0x2588
 line_char = "━"
 indent = "   "
 
+# NOTE: zero-width space - to mark trackers with next <= today+oneday
 BEF = '\u200B'
-AFT = '\u00A0'
-NON_BREAKING_HYPHEN = '\u2011'
 
 # display_text = f"""\
 # Trackers
@@ -388,7 +483,7 @@ NON_BREAKING_HYPHEN = '\u2011'
 # {indent}{line_char}  {line_char*30}
 # """
 display_text = f"""\
-Trackers{BEF}{AFT}{NON_BREAKING_HYPHEN}
+Trackers{BEF}
 """
 
 # display_text = "Trackers\n"
@@ -401,7 +496,6 @@ trackers = {
     9: "get haircut"
 }
 
-# trackers = {char: i+1 for i, char in enumerate(string.ascii_lowercase[:26])}
 list_labels = [char for i, char in enumerate(string.ascii_lowercase)]
 tracker_list = []
 label_to_id = {}
@@ -417,12 +511,11 @@ for k, v in trackers.items():
         pre = ""
     tracker_list.append(f"{pre}{indent}{label}  {v} [{k}]")
 
-
 display_text += "\n".join(tracker_list)
 
 # display_text +=  "\n".join([f"{indent}{list_labels[k]}  Tracker {v}" for k, v in trackers.items()])
 
-display_area = TextArea(text=display_text, read_only=True, search_field=search_field, style="class:display-area")
+display_area = TextArea(text="initializing ...", read_only=True, search_field=search_field, style="class:display-area")
 
 input_area = TextArea(focusable=True, multiline=True, height=3, prompt='> ', style="class:input-area")
 
@@ -452,36 +545,71 @@ dialog_container = ConditionalContainer(
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
 status_window = Window(content=status_control, height=1, style="class:status-window")
 
-# Layout
-root_container = HSplit([
-    menu_container,
-    display_area,
-    search_field,
-    status_window,
-    dialog_container,  # Conditional Input Area
-])
-
-layout = Layout(root_container)
-
 # Application Setup
 kb = KeyBindings()
 
 key_msg = "Press the key for the tracker to"
 
+@kb.add('f1')
+def menu(*event):
+    """Focus menu."""
+    if event:
+        if app.layout.has_focus(root_container.window):
+            app.layout.focus(root_container.body)
+        else:
+            app.layout.focus(root_container.window)
+
+@kb.add('f2')
+def do_about(*event):
+    display_message('track information')
+
+@kb.add('f3')
+def do_check_updates(*event):
+    display_message('Checking for updates...')
+
+@kb.add('f4')
+def do_help(*event):
+    display_message('Help info ...')
+
 @kb.add('c-q')
-def exit_app(event):
+def exit_app(*event):
     """Exit the application."""
-    event.app.exit()
+    app.exit()
 
-app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
-
-def log_to_text_area(message):
+def display_message(message):
     """Log messages to the text area."""
-    log_area.text += message + '\n'
+    display_area.text = message
+    message_control.text = ""
     app.invalidate()  # Refresh the UI
 
+
+@kb.add('l', filter=Condition(lambda: menu_mode[0]))
+def list_trackers(*event):
+    """Add a new tracker."""
+    action[0] = "list"
+    menu_mode[0] = False
+    select_mode[0] = False
+    dialog_visible[0] = False
+    input_visible[0] = False
+    display_message(tracker_manager.list_trackers())
+    # message_control.text = "Adding a new tracker..."
+    app.layout.focus(display_area)
+
+@kb.add('i', filter=Condition(lambda: menu_mode[0]))
+def tracker_info(*event):
+    """Add a new tracker."""
+    action[0] = "info"
+    menu_mode[0] = False
+    select_mode[0] = True
+    dialog_visible[0] = True
+    input_visible[0] = False
+    message_control.text = f"{key_msg} info."
+    # display_message(tracker_manager.list_trackers())
+    # message_control.text = "Adding a new tracker..."
+    # app.layout.focus(input_area)
+
 @kb.add('a', filter=Condition(lambda: menu_mode[0]))
-def add_tracker(event):
+def add_tracker(*event):
     """Add a new tracker."""
     action[0] = "add"
     menu_mode[0] = False
@@ -491,7 +619,7 @@ def add_tracker(event):
     app.layout.focus(input_area)
 
 @kb.add('d', filter=Condition(lambda: menu_mode[0]))
-def delete_tracker(event):
+def delete_tracker(*event):
     """Delete a tracker."""
     action[0] = "delete"
     menu_mode[0] = False
@@ -501,8 +629,8 @@ def delete_tracker(event):
     message_control.text = f"{key_msg} delete."
 
 @kb.add('e', filter=Condition(lambda: menu_mode[0]))
-def edit_tracker(event):
-    """Edit a tracker."""
+def edit_history(*event):
+    """Edit a tracker history."""
     action[0] = "edit"
     menu_mode[0] = False
     select_mode[0] = True
@@ -510,10 +638,61 @@ def edit_tracker(event):
     input_visible[0] = False
     message_control.text = f"{key_msg} edit."
 
-def select_tracker(event, key):
+def rename_tracker(*event):
+    action[0] = "rename"
+    menu_mode[0] = False
+    select_mode[0] = True
+    dialog_visible[0] = True
+    input_visible[0] = False
+    message_control.text = f"{key_msg} rename tracker."
+
+# @kb.add('f4')
+# def do_check_updates(*event):
+#     display_message('Checking for updates...')
+#     # status, res = check_update()
+#     # '?', None (info unavalable)
+#     # EtmChar.UPDATE_CHAR, available_version (update to available_version is possible)
+#     # '', current_version (current_version is the latest available)
+#     # if status in ['?', '']:   # message only
+#     #     show_message('Update Information', res, 2)
+
+def add_completion(self, completion_dt: datetime):
+    action[0] = "add"
+    menu_mode[0] = False
+    select_mode[0] = True
+    dialog_visible[0] = True
+    input_visible[0] = False
+    message_control.text = f"{key_msg} add completion."
+
+    # ok, msg = True, ""
+    # needs_sorting = False
+    # if self.history and self.history[-1] >= completion_dt:
+    #     print(f"""\
+    # The new completion datetime
+    #     {completion_dt}
+    # is earlier than the previous completion datetime
+    #     {self.history[-1]}.""")
+    #     res = input("Is this what you wanted? (y/N): ").strip()
+    #     if res.lower() not in ['y', 'yes']:
+    #         return False, "aborted"
+    #     needs_sorting = True
+
+    # self.history.append(completion_dt)
+    # if needs_sorting:
+    #     self.history.sort()
+    # if len(self.history) > Tracker.max_history:
+    #     self.history = self.history[-Tracker.max_history:]
+
+    # # Notify ZODB that this object has changed
+    # self._p_changed = True
+
+    return True, f"recorded completion for {completion_dt}"
+
+def select_tracker(event, key: str):
     """Generic tracker selection."""
-    if key in trackers:
-        selected_id = trackers[key]
+    tracker = tracker_manager.get_tracker_from_label(key)
+    if tracker:
+        selected_id = tracker.doc_id
         if action[0] == "edit":
             message_control.text = f"Editing tracker ID {selected_id}"
             dialog_visible[0] = True
@@ -524,19 +703,86 @@ def select_tracker(event, key):
             message_control.text = f"Deleting tracker ID {selected_id}"
             select_mode[0] = False
             # Execute delete logic here
+            app.layout.focus(display_area)
+        elif action[0] == "add":
+            message_control.text = f"Adding completion for tracker ID {selected_id}"
+            select_mode[0] = False
+            # Execute show logic here
+        elif action[0] == "info":
+            message_control.text = f"Showing tracker ID {selected_id}"
+            select_mode[0] = False
+            dialog_visible[0] = False
+            input_visible[0] = False
+            display_message(tracker.get_tracker_info())
+            # Execute show logic here
+            app.layout.focus(display_area)
         app.invalidate()
 
 # Bind all lowercase letters to select_tracker
 for key in string.ascii_lowercase:
     kb.add(key, filter=Condition(lambda: select_mode[0]))(lambda event, key=key: select_tracker(event, key))
 
+# Layout
+
+
+body = HSplit([
+    # menu_container,
+    display_area,
+    search_field,
+    status_window,
+    dialog_container,  # Conditional Input Area
+])
+
+root_container = MenuContainer(
+    body=body,
+    menu_items=[
+        MenuItem(
+            'track',
+            children=[
+                MenuItem('F1) toggle menu', handler=menu),
+                MenuItem('F2) about etm', handler=do_about),
+                MenuItem('F3) check for updates', handler=do_check_updates),
+                MenuItem('F4) help', handler=do_help),
+                MenuItem('^q) quit', handler=exit_app),
+            ]
+        ),
+        MenuItem(
+            'edit',
+            children=[
+                MenuItem('n) add new tracker', handler=add_tracker),
+                MenuItem('c) add completion', handler=add_completion),
+                MenuItem('d) delete tracker', handler=delete_tracker),
+                MenuItem('e) edit completions', handler=edit_history),
+                MenuItem('r) rename tracker', handler=rename_tracker),
+            ]
+        ),
+        MenuItem(
+            'view',
+            children=[
+                MenuItem('l) list trackers', handler=list_trackers),
+                MenuItem('i) tracker info', handler=tracker_info),
+            ]
+        ),
+    ]
+)
+
+layout = Layout(root_container)
+# app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
+
 app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
 
+tracker_manager = None
 def main():
-    tracker_manager = None
+    global tracker_manager
     try:
-        db_file = "/Users/dag/track-dgraham/tracker.fs"
+        # TODO: use an environment variable or ~/.tracker/tracker.fs?
+        db_file = "/Users/dag/track/tracker.fs"
         tracker_manager = TrackerManager(db_file)
+
+        display_text = tracker_manager.list_trackers()
+        print(display_text)
+        display_message(display_text)
+
 
         start_periodic_checks()  # Start the periodic checks
         app.run()

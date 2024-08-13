@@ -340,6 +340,7 @@ def main():
                     print("Invalid ID. Please enter a numeric value.")
 
             elif choice == 'l':
+                clear_screen()
                 tracker_manager.list_trackers()
 
             elif choice.startswith('r'):
@@ -369,6 +370,7 @@ def main():
                         doc_id_input = input(f"Enter tracker ID (or 0 for all) [{last_id}]: ").strip()
                     doc_id = int(doc_id_input) if doc_id_input else last_id
                     if doc_id is not None:
+                        clear_screen()
                         if doc_id == 0:
                             tracker_manager.get_tracker_data()
                         else:
