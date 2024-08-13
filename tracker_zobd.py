@@ -15,6 +15,10 @@ from prompt_toolkit.widgets import (
     MenuContainer,
     MenuItem,
 )
+from prompt_toolkit.key_binding.bindings.focus import (
+    focus_next,
+    focus_previous,
+)
 import string
 import shutil
 import threading
@@ -265,7 +269,8 @@ class Tracker(Persistent):
             next_expected_completion = None
         wrapped_history = wrap(', '.join(x.strftime('%Y-%m-%d %H:%M') for x in self.history))
 
-        return f"""{self.name}
+        return f"""\
+ {self.name}
     completions ({len(self.history)}):
         last: {Tracker.format_dt(last_completion)}
         next: {Tracker.format_dt(next_expected_completion)}
@@ -275,6 +280,8 @@ class Tracker(Persistent):
         change: {Tracker.format_td(change)}
     history:
         {wrapped_history}
+
+ id: {self.doc_id}
         """
 
 class TrackerManager:
@@ -551,25 +558,26 @@ kb = KeyBindings()
 key_msg = "Press the key for the tracker to"
 
 @kb.add('f1')
-def menu(*event):
+def menu(event=None):
     """Focus menu."""
     if event:
         if app.layout.has_focus(root_container.window):
-            app.layout.focus(root_container.body)
+            focus_previous(event)
+            # app.layout.focus(root_container.body)
         else:
             app.layout.focus(root_container.window)
 
 @kb.add('f2')
 def do_about(*event):
-    display_message('track information')
+    display_message('about track ...')
 
 @kb.add('f3')
 def do_check_updates(*event):
-    display_message('Checking for updates...')
+    display_message('update info ...')
 
 @kb.add('f4')
 def do_help(*event):
-    display_message('Help info ...')
+    display_message('help info ...')
 
 @kb.add('c-q')
 def exit_app(*event):
@@ -740,7 +748,7 @@ root_container = MenuContainer(
             'track',
             children=[
                 MenuItem('F1) toggle menu', handler=menu),
-                MenuItem('F2) about etm', handler=do_about),
+                MenuItem('F2) about track', handler=do_about),
                 MenuItem('F3) check for updates', handler=do_check_updates),
                 MenuItem('F4) help', handler=do_help),
                 MenuItem('^q) quit', handler=exit_app),
@@ -770,6 +778,8 @@ layout = Layout(root_container)
 # app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
 
 app = Application(layout=layout, key_bindings=kb, full_screen=True, style=style)
+
+app.layout.focus(root_container.body)
 
 tracker_manager = None
 def main():
