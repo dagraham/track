@@ -885,15 +885,63 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 app.layout.focus(root_container.body)
 
 tracker_manager = None
+
+import sys
+import logging
+
+# Console logging
+def setup_console_logging():
+    # Default logging level
+    log_level = logging.INFO
+
+    # Check if a logging level argument was provided
+    if len(sys.argv) > 1:
+        try:
+            # Convert the argument to an integer and set it as the logging level
+            log_level = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+
+    # Configure logging
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    logging.info(f"Logging initialized at level {log_level}")
+
+# File logging
+def setup_file_logging():
+    log_level = logging.INFO
+
+    if len(sys.argv) > 1:
+        try:
+            log_level = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        filename="logs/tracker.log",  # Output to a file only
+        filemode="a"  # Append to the file
+    )
+    logging.info(f"Logging initialized at level {log_level}")
+
+
 def main():
     global tracker_manager
+    setup_file_logging()
     try:
         # TODO: use an environment variable or ~/.tracker/tracker.fs?
         db_file = "/Users/dag/track/tracker.fs"
+        logging.info(f"Starting TrackerManager with database file {db_file}")
         tracker_manager = TrackerManager(db_file)
 
         display_text = tracker_manager.list_trackers()
-        print(display_text)
+        logging.debug(f"Tracker list: {display_text}")
+        # print(display_text)
         display_message(display_text)
 
 
@@ -906,8 +954,10 @@ def main():
     finally:
         if tracker_manager:
             tracker_manager.close()
-            print(f" and closed\n  {db_file}")
+            logging.info(f"Closed TrackerManager and database file {db_file}")
+            # print(f" and closed\n  {db_file}")
         else:
+            logging.info("TrackerManager was not initialized")
             print("")
 
 if __name__ == "__main__":
