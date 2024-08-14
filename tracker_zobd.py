@@ -107,7 +107,15 @@ def unwrap(wrapped_text):
 
     return unwrapped_text
 
-# Tracker and TrackerManager classes here?
+def sort_key(tracker):
+    # Sorting by None first (using doc_id as secondary sorting)
+    if tracker.next_expected_completion is None:
+        return (0, tracker.doc_id)
+    # Sorting by datetime for non-None values
+    else:
+        return (1, tracker.next_expected_completion)
+
+# Tracker
 class Tracker(Persistent):
     max_history = 10
 
@@ -183,30 +191,83 @@ class Tracker(Persistent):
         self.name = name
         self.history = []
 
+
+    @property
+    def info(self):
+        # Lazy initialization with re-computation logic
+        if not hasattr(self, '_info') or self._info is None:
+            self._info = self.compute_info()
+        return self._info
+
+    # @info.setter
+    # def info(self, value):
+    #     # This setter could be used if you want to manually set it
+    #     self._info = value
+    #     self._p_changed = True  # Mark the object as changed in ZODB
+
+    def compute_info(self):
+        # Example computation based on history, returning a dict
+        result = {}
+        if not self.history:
+            result = dict(last_completion=None, num_completions=0, num_intervals=0, average_interval=timedelta(minutes=0), last_interval=timedelta(minutes=0), change=timedelta(minutes=0), next_expected_completion=None)
+        else:
+            result['last_completion'] = self.history[-1] if len(self.history) > 0 else None
+            result['num_completions'] = len(self.history)
+            if result['num_completions'] > 1:
+                intervals = [self.history[i+1] - self.history[i] for i in range(len(self.history) - 1)]
+                result['num_intervals'] = len(intervals)
+                result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
+                result['last_interval'] = intervals[-1]
+                result['change'] = result['last_interval'] - result['average_interval'] if result['last_interval'] >= result['average_interval'] else - (result['average_interval'] - result['last_interval'])
+                result['next_expected_completion'] = result['last_completion'] + result['average_interval']
+            else:
+                intervals = []
+                result['change'] = result['average_interval'] = result['last_interval'] = timedelta(minutes=0)
+                result['next_expected_completion'] = None
+            result['num_intervals'] = len(intervals)
+        self._p_changed = True
+        # print(f"returning {result = }")
+        return result
+
+    # XXX: Just for reference
+    def add_to_history(self, new_event):
+        self.history.append(new_event)
+        self.invalidate_info()
+        self._p_changed = True  # Mark object as changed in ZODB
+
+    def invalidate_info(self):
+        # Invalidate the cached dict so it will be recomputed on next access
+        if hasattr(self, '_info'):
+            delattr(self, '_info')
+
+
     def record_completion(self, completion_dt: datetime):
         ok, msg = True, ""
-        needs_sorting = False
-        if self.history and self.history[-1] >= completion_dt:
-            print(f"""\
-        The new completion datetime
-            {completion_dt}
-        is earlier than the previous completion datetime
-            {self.history[-1]}.""")
-            res = input("Is this what you wanted? (y/N): ").strip()
-            if res.lower() not in ['y', 'yes']:
-                return False, "aborted"
-            needs_sorting = True
-
+        # needs_sorting = False
+        # if self.history and self.history[-1] >= completion_dt:
+        #     print(f"""\
+        # The new completion datetime
+        #     {completion_dt}
+        # should be later than the previous completion datetime
+        #     {self.history[-1]}
+        # but is earlier.""")
+        #     res = input("Is this what you wanted? (y/N): ").strip()
+        #     if res.lower() not in ['y', 'yes']:
+        #         return False, "aborted"
+        #     needs_sorting = True
         self.history.append(completion_dt)
-        if needs_sorting:
-            self.history.sort()
+        # if needs_sorting:
+        self.history.sort()
         if len(self.history) > Tracker.max_history:
             self.history = self.history[-Tracker.max_history:]
 
         # Notify ZODB that this object has changed
+        self.invalidate_info()
         self._p_changed = True
 
+        # print(msg)
         return True, f"recorded completion for {completion_dt}"
+
     def edit_history(self):
         if not self.history:
             print("No history to edit.")
@@ -250,42 +311,33 @@ class Tracker(Persistent):
                 self.history = self.history[-self.max_history:]
 
             # Notify ZODB that this object has changed
+            self.update_tracker_info()
             self._p_changed = True
 
         except ValueError:
             print("Invalid input. Please enter a number.")
 
     def get_tracker_info(self):
-        last_completion = self.history[-1] if len(self.history) > 0 else None
-        if len(self.history) > 1:
-            intervals = [self.history[i+1] - self.history[i] for i in range(len(self.history) - 1)]
-            num_intervals = len(intervals)
-            average_interval = sum(intervals, timedelta()) / num_intervals
-            last_interval = intervals[-1]
-            change = last_interval - average_interval if last_interval >= average_interval else - (average_interval - last_interval)
-            next_expected_completion = last_completion + average_interval
-        else:
-            intervals = []
-            num_intervals = 0
-            change = average_interval = last_interval = timedelta(minutes=0)
-            next_expected_completion = None
-        wrapped_history = wrap(', '.join(x.strftime('%Y-%m-%d %H:%M') for x in self.history))
-
+        if not hasattr(self, '_info') or self._info is None:
+            self._info = self.compute_info()
+        # insert a placeholder to prevent date and time from being split across multiple lines when wrapping
+        format_str = f"%Y-%m-%d{PLACEHOLDER}%H:%M"
+        wrapped_history = wrap(', '.join(x.strftime(format_str) for x in self.history))
         return f"""\
- {self.name} [#{self.doc_id}]
-    completions ({len(self.history)}):
-        last: {Tracker.format_dt(last_completion)}
-        next: {Tracker.format_dt(next_expected_completion)}
-    intervals ({len(intervals)}):
-        average: {Tracker.format_td(average_interval)}
-        last: {Tracker.format_td(last_interval)}
-        change: {Tracker.format_td(change)}
+ #{self.doc_id} {self.name}
+    completions ({self._info['num_completions']}):
+        last: {Tracker.format_dt(self._info['last_completion'])}
+        next: {Tracker.format_dt(self._info['next_expected_completion'])}
+    intervals ({self._info['num_intervals']}):
+        average: {Tracker.format_td(self._info['average_interval'])}
+        last: {Tracker.format_td(self._info['last_interval'])}
+        change: {Tracker.format_td(self._info['change'])}
     history:
         {wrapped_history}
     """
 
 class TrackerManager:
-    labels = [char for i, char in enumerate(string.ascii_lowercase)]
+    labels = "abcdefghijklmnopqrstuvwxyz"
 
     def __init__(self, db_path=None) -> None:
         if db_path is None:
@@ -293,6 +345,7 @@ class TrackerManager:
         self.db_path = db_path
         self.trackers = {}
         self.label_to_id = {}
+        self.active_page = 0
         self.storage = FileStorage.FileStorage(self.db_path)
         self.db = DB(self.storage)
         self.connection = self.db.open()
@@ -320,7 +373,6 @@ class TrackerManager:
     {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_data()}""")
 
     def get_tracker_data(self, doc_id: int = None):
-
         if doc_id is None:
             print("data for all trackers:")
             for k, v in self.trackers.items():
@@ -329,20 +381,54 @@ class TrackerManager:
             print(f"data for tracker {doc_id}:")
             print(f"   {doc_id:2> }. {self.trackers[doc_id].get_tracker_data()}")
 
+    def sort_key(self, tracker):
+        next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
+        if next_dt is None:
+            return (0, tracker.doc_id)
+        else:
+            return (1, next_dt)
+
+    def get_sorted_trackers(self):
+        # Extract the list of trackers
+        trackers = [v for k, v in self.trackers.items()]
+        # Sort the trackers
+        return sorted(trackers, key=self.sort_key)
+
     def list_trackers(self):
-        rows = [f"Tracker List"]
+        num_pages = (len(self.trackers) + 25) // 26
+        page_banner = f" (page {self.active_page + 1}/{num_pages})"
+        banner = f" Tracker List{page_banner}\n"
+        rows = []
         count = 0
-        for k, v in self.trackers.items():
+        start_index = self.active_page * 26
+        end_index = start_index + 26
+        sorted_trackers = self.get_sorted_trackers()
+        for tracker in sorted_trackers[start_index:end_index]:
+            next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
+            next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
             label = TrackerManager.labels[count]
-            self.label_to_id[label] = k
+            self.label_to_id[(self.active_page, label)] = tracker.doc_id
             count += 1
-            rows.append(f"   {label} {v.name}")
-        return "\n".join(rows)
+            rows.append(f" {label}   {next:<10} {tracker.name}")
+        return banner +"\n".join(rows)
+
+    def set_active_page(self, page_num):
+        if 0 <= page_num < (len(self.trackers) + 25) // 26:
+            self.active_page = page_num
+        else:
+            print("Invalid page number.")
+
+    def next_page(self):
+        self.set_active_page(self.active_page + 1)
+
+    def previous_page(self):
+        self.set_active_page(self.active_page - 1)
 
     def get_tracker_from_label(self, label: str):
-        if label not in self.label_to_id:
+        pagelabel = (self.active_page, label)
+        if pagelabel not in self.label_to_id:
             return None
-        return self.trackers[self.label_to_id[label]]
+        return self.trackers[self.label_to_id[pagelabel]]
 
     def save_data(self):
         self.root['trackers'] = self.trackers
@@ -354,7 +440,6 @@ class TrackerManager:
                 self.root['trackers'] = {}
                 self.root['next_id'] = 1  # Initialize the ID counter
                 transaction.commit()
-
             self.trackers = self.root['trackers']
         except Exception as e:
             print(f"Warning: could not load data from '{self.db_path}': {str(e)}")
@@ -381,10 +466,22 @@ class TrackerManager:
         return self.trackers.get(doc_id, None)
 
     def close(self):
-        self.connection.close()
-        self.db.close()
-        self.storage.close()
-
+        # Make sure to commit or abort any ongoing transaction
+        print()
+        try:
+            if self.connection.transaction_manager.isDoomed():
+                print("Transaction aborted.")
+                transaction.abort()
+            else:
+                print("Transaction committed.")
+                transaction.commit()
+        except Exception as e:
+            print(f"Error during transaction handling: {e}")
+            transaction.abort()
+        else:
+            print("Transaction handled successfully.")
+        finally:
+            self.connection.close()
 
 freq = 12
 
@@ -445,11 +542,10 @@ def start_periodic_checks():
     """Start the periodic check for alarms in a separate thread."""
     threading.Thread(target=check_alarms, daemon=True).start()
 
-def center_text(text):
-    line_length = shutil.get_terminal_size()[0] - 2
-    if len(text) >= line_length:
+def center_text(text, width: int = shutil.get_terminal_size()[0] - 2):
+    if len(text) >= width:
         return text
-    total_padding = line_length - len(text)
+    total_padding = width - len(text)
     left_padding = total_padding // 2
     right_padding = total_padding - left_padding
     return ' ' * left_padding + text + ' ' * right_padding
@@ -562,7 +658,7 @@ def read_readme():
 # Application Setup
 kb = KeyBindings()
 
-key_msg = "Press the key for the tracker to"
+key_msg = "Enter the label for the row of the tracker."
 
 @kb.add('f1')
 def menu(event=None):
@@ -602,7 +698,7 @@ def display_message(message):
 def list_trackers(*event):
     """Add a new tracker."""
     action[0] = "list"
-    menu_mode[0] = False
+    menu_mode[0] = True
     select_mode[0] = False
     dialog_visible[0] = False
     input_visible[0] = False
@@ -612,13 +708,13 @@ def list_trackers(*event):
 
 @kb.add('i', filter=Condition(lambda: menu_mode[0]))
 def tracker_info(*event):
-    """Add a new tracker."""
+    """Show tracker information"""
     action[0] = "info"
-    menu_mode[0] = False
+    menu_mode[0] = True
     select_mode[0] = True
     dialog_visible[0] = True
     input_visible[0] = False
-    message_control.text = f"{key_msg} info."
+    message_control.text = f"For information, {key_msg}"
     # display_message(tracker_manager.list_trackers())
     # message_control.text = "Adding a new tracker..."
     # app.layout.focus(input_area)
