@@ -60,6 +60,8 @@ def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] 
             subsequent_indent = initial_indent + ' ' * 2
         elif stripped_para.startswith(('@', '&')):
             subsequent_indent = initial_indent + ' ' * 3
+        elif stripped_para and stripped_para[0].isdigit():
+            subsequent_indent = initial_indent + ' ' * 3
         else:
             subsequent_indent = initial_indent + ' ' * indent
 
@@ -550,6 +552,13 @@ dialog_container = ConditionalContainer(
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
 status_window = Window(content=status_control, height=1, style="class:status-window")
 
+def read_readme():
+    try:
+        with open("README.md", "r") as file:
+            return file.read()
+    except FileNotFoundError:
+        return "README.md file not found."
+
 # Application Setup
 kb = KeyBindings()
 
@@ -575,7 +584,8 @@ def do_check_updates(*event):
 
 @kb.add('f4')
 def do_help(*event):
-    display_message('help info ...')
+    help_text = read_readme()
+    display_message(wrap(help_text, 0))
 
 @kb.add('c-q')
 def exit_app(*event):
@@ -587,7 +597,6 @@ def display_message(message):
     display_area.text = message
     message_control.text = ""
     app.invalidate()  # Refresh the UI
-
 
 @kb.add('l', filter=Condition(lambda: menu_mode[0]))
 def list_trackers(*event):
