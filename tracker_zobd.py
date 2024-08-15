@@ -4,6 +4,7 @@ from prompt_toolkit import Application
 from prompt_toolkit.layout import Layout, HSplit
 from prompt_toolkit.layout.containers import Window, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.styles import Style
@@ -19,11 +20,13 @@ from prompt_toolkit.key_binding.bindings.focus import (
     focus_next,
     focus_previous,
 )
+from dateutil.parser import parse, parserinfo
 import string
 import shutil
 import threading
 import traceback
 import sys
+import logging
 from ZODB import DB, FileStorage
 from persistent import Persistent
 import transaction
@@ -40,6 +43,50 @@ NON_PRINTING_CHAR = '\u200B'
 PLACEHOLDER = '\u00A0'
 # Placeholder for hyphens to prevent word breaks
 NON_BREAKING_HYPHEN = '\u2011'
+
+# Console logging
+def setup_console_logging():
+    # Default logging level
+    log_level = logging.INFO
+
+    # Check if a logging level argument was provided
+    if len(sys.argv) > 1:
+        try:
+            # Convert the argument to an integer and set it as the logging level
+            log_level = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+
+    # Configure logging
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    logging.info(f"Logging initialized at level {log_level}")
+
+# File logging
+def setup_file_logging():
+    log_level = logging.INFO
+
+    if len(sys.argv) > 1:
+        try:
+            log_level = int(sys.argv[1])
+        except ValueError:
+            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        filename="/Users/dag/track-test/logs/tracker.log",  # Output to a file only
+        filemode="a"  # Append to the file
+    )
+    logging.info(f"Logging initialized at level {log_level}")
+
+# make logging available globally
+setup_file_logging()
+logger = logging.getLogger()
 
 def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 3):
     # Preprocess to replace spaces within specific "@\S" patterns with PLACEHOLDER
@@ -162,7 +209,7 @@ class Tracker(Persistent):
             ret = sign + ' '.join(until)
             return ret
         except Exception as e:
-            print(f'{td}: {e}')
+            logger.debug(f'{td}: {e}')
             return ''
 
 
@@ -181,7 +228,7 @@ class Tracker(Persistent):
                 dt = parse(dt, parserinfo=pi)
                 return dt
             except Exception as e:
-                print(f"Error parsing datetime: {dt}\ne {repr(e)}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+                logger.debug(f"Error parsing datetime: {dt}\ne {repr(e)}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
                 return None
         else:
             return None
@@ -190,6 +237,7 @@ class Tracker(Persistent):
         self.doc_id = int(doc_id)
         self.name = name
         self.history = []
+        logger.debug(f"Created tracker {self.name} ({self.doc_id})")
 
 
     @property
@@ -213,20 +261,25 @@ class Tracker(Persistent):
         else:
             result['last_completion'] = self.history[-1] if len(self.history) > 0 else None
             result['num_completions'] = len(self.history)
-            if result['num_completions'] > 1:
+            intervals = []
+            result['num_intervals'] = 0
+            result['change'] = result['average_interval'] = result['last_interval'] = None
+            result['next_expected_completion'] = None
+            if result['num_completions'] > 0:
                 intervals = [self.history[i+1] - self.history[i] for i in range(len(self.history) - 1)]
                 result['num_intervals'] = len(intervals)
-                result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
+            if result['num_intervals'] > 0:
                 result['last_interval'] = intervals[-1]
-                result['change'] = result['last_interval'] - result['average_interval'] if result['last_interval'] >= result['average_interval'] else - (result['average_interval'] - result['last_interval'])
+            if result['num_intervals'] > 1:
+                result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
                 result['next_expected_completion'] = result['last_completion'] + result['average_interval']
-            else:
-                intervals = []
-                result['change'] = result['average_interval'] = result['last_interval'] = timedelta(minutes=0)
-                result['next_expected_completion'] = None
-            result['num_intervals'] = len(intervals)
+            if result['num_intervals'] > 2:
+                if result['last_interval'] >= result['average_interval']:
+                    result['change'] = result['last_interval'] - result['average_interval']
+                else:
+                    result['change'] = - (result['average_interval'] - result['last_interval'])
         self._p_changed = True
-        # print(f"returning {result = }")
+        # logger.debug(f"returning {result = }")
         return result
 
     # XXX: Just for reference
@@ -243,20 +296,7 @@ class Tracker(Persistent):
 
     def record_completion(self, completion_dt: datetime):
         ok, msg = True, ""
-        # needs_sorting = False
-        # if self.history and self.history[-1] >= completion_dt:
-        #     print(f"""\
-        # The new completion datetime
-        #     {completion_dt}
-        # should be later than the previous completion datetime
-        #     {self.history[-1]}
-        # but is earlier.""")
-        #     res = input("Is this what you wanted? (y/N): ").strip()
-        #     if res.lower() not in ['y', 'yes']:
-        #         return False, "aborted"
-        #     needs_sorting = True
         self.history.append(completion_dt)
-        # if needs_sorting:
         self.history.sort()
         if len(self.history) > Tracker.max_history:
             self.history = self.history[-Tracker.max_history:]
@@ -264,18 +304,16 @@ class Tracker(Persistent):
         # Notify ZODB that this object has changed
         self.invalidate_info()
         self._p_changed = True
-
-        # print(msg)
         return True, f"recorded completion for {completion_dt}"
 
     def edit_history(self):
         if not self.history:
-            print("No history to edit.")
+            logger.debug("No history to edit.")
             return
 
         # Display current history
         for i, dt in enumerate(self.history):
-            print(f"{i + 1}. {self.format_dt(dt)}")
+            logger.debug(f"{i + 1}. {self.format_dt(dt)}")
 
         # Choose an entry to edit
         try:
@@ -350,36 +388,51 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        print(f"opened tracker manager using data from\n  {self.db_path}")
+        logger.debug(f"opened tracker manager using data from\n  {self.db_path}")
         self.load_data()
+
+    def load_data(self):
+        try:
+            if 'trackers' not in self.root:
+                self.root['trackers'] = {}
+                self.root['next_id'] = 1  # Initialize the ID counter
+                transaction.commit()
+            self.trackers = self.root['trackers']
+        except Exception as e:
+            logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
+            self.trackers = {}
 
     def add_tracker(self, name: str) -> None:
         doc_id = self.root['next_id']
+        # Create a new tracker with the current doc_id
         tracker = Tracker(name, doc_id)
+        # Add the tracker to the trackers dictionary
         self.trackers[doc_id] = tracker
-        self.root['next_id'] += 1  # Increment the ID counter
+        # Increment the next_id for the next tracker
+        self.root['next_id'] += 1
+        # Save the updated data
         self.save_data()
-        print(f"Tracker '{name}' added with ID {doc_id}")
+
+        logger.debug(f"Tracker '{name}' added with ID {doc_id}")
+
 
     def record_completion(self, doc_id: int, dt: datetime):
         # dt will be a datetime
         ok, msg = self.trackers[doc_id].record_completion(dt)
         if not ok:
-            print(msg)
+            display_message(msg)
             return
+        display_message(f"""\
+    {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_info()}""")
 
-        self.save_data()
-        print(f"""\
-    {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_data()}""")
-
-    def get_tracker_data(self, doc_id: int = None):
-        if doc_id is None:
-            print("data for all trackers:")
-            for k, v in self.trackers.items():
-                print(f"   {k:2> }. {v.get_tracker_data()}")
-        elif doc_id in self.trackers:
-            print(f"data for tracker {doc_id}:")
-            print(f"   {doc_id:2> }. {self.trackers[doc_id].get_tracker_data()}")
+    # def get_tracker_data(self, doc_id: int = None):
+    #     if doc_id is None:
+    #         logger.debug("data for all trackers:")
+    #         for k, v in self.trackers.items():
+    #             logger.debug(f"   {k:2> }. {v.get_tracker_data()}")
+    #     elif doc_id in self.trackers:
+    #         logger.debug(f"data for tracker {doc_id}:")
+    #         logger.debug(f"   {doc_id:2> }. {self.trackers[doc_id].get_tracker_data()}")
 
     def sort_key(self, tracker):
         next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
@@ -416,7 +469,7 @@ class TrackerManager:
         if 0 <= page_num < (len(self.trackers) + 25) // 26:
             self.active_page = page_num
         else:
-            print("Invalid page number.")
+            logger.debug("Invalid page number.")
 
     def next_page(self):
         self.set_active_page(self.active_page + 1)
@@ -434,17 +487,6 @@ class TrackerManager:
         self.root['trackers'] = self.trackers
         transaction.commit()
 
-    def load_data(self):
-        try:
-            if 'trackers' not in self.root:
-                self.root['trackers'] = {}
-                self.root['next_id'] = 1  # Initialize the ID counter
-                transaction.commit()
-            self.trackers = self.root['trackers']
-        except Exception as e:
-            print(f"Warning: could not load data from '{self.db_path}': {str(e)}")
-            self.trackers = {}
-
     def update_tracker(self, doc_id, tracker):
         self.trackers[doc_id] = tracker
         self.save_data()
@@ -460,7 +502,7 @@ class TrackerManager:
             tracker.edit_history()
             self.save_data()
         else:
-            print(f"No tracker found with ID {doc_id}.")
+            logger.debug(f"No tracker found with ID {doc_id}.")
 
     def get_tracker_from_id(self, doc_id):
         return self.trackers.get(doc_id, None)
@@ -470,16 +512,16 @@ class TrackerManager:
         print()
         try:
             if self.connection.transaction_manager.isDoomed():
-                print("Transaction aborted.")
+                logger.error("Transaction aborted.")
                 transaction.abort()
             else:
-                print("Transaction committed.")
+                logger.info("Transaction committed.")
                 transaction.commit()
         except Exception as e:
-            print(f"Error during transaction handling: {e}")
+            logger.error(f"Error during transaction handling: {e}")
             transaction.abort()
         else:
-            print("Transaction handled successfully.")
+            logger.info("Transaction handled successfully.")
         finally:
             self.connection.close()
 
@@ -580,50 +622,13 @@ indent = "   "
 # NOTE: zero-width space - to mark trackers with next <= today+oneday
 BEF = '\u200B'
 
-# display_text = f"""\
-# Trackers
-# {indent}{box}  name
-# {indent}{line_char}  {line_char*30}
-# """
-display_text = f"""\
-Trackers{BEF}
-"""
-
-# display_text = "Trackers\n"
-
-trackers = {
-    1: "fill birdfeeders",
-    3: "fill water dispenser",
-    5: "fill cat food dispenser",
-    7: "fill dog food dispenser",
-    9: "get haircut"
-}
-
-list_labels = [char for i, char in enumerate(string.ascii_lowercase)]
-tracker_list = []
-label_to_id = {}
-index = 0
-for k, v in trackers.items():
-    label = list_labels[index]
-    label_to_id[label] = k
-    index += 1
-    # NOTE: use BEF for trackers with next <= today + oneday
-    if index <= 3:
-        pre = BEF
-    else:
-        pre = ""
-    tracker_list.append(f"{pre}{indent}{label}  {v} [{k}]")
-
-display_text += "\n".join(tracker_list)
-
-# display_text +=  "\n".join([f"{indent}{list_labels[k]}  Tracker {v}" for k, v in trackers.items()])
-
 display_area = TextArea(text="initializing ...", read_only=True, search_field=search_field, style="class:display-area")
 
 input_area = TextArea(focusable=True, multiline=True, height=3, prompt='> ', style="class:input-area")
 
 dialog_visible = [False]
 input_visible = [False]
+action = [None]
 
 input_container = ConditionalContainer(
     content=input_area,
@@ -658,7 +663,7 @@ def read_readme():
 # Application Setup
 kb = KeyBindings()
 
-key_msg = "Enter the label for the row of the tracker."
+key_msg = "enter the letter for the tracker row."
 
 @kb.add('f1')
 def menu(event=None):
@@ -705,6 +710,16 @@ def list_trackers(*event):
     display_message(tracker_manager.list_trackers())
     # message_control.text = "Adding a new tracker..."
     app.layout.focus(display_area)
+    app.invalidate()
+
+def close_dialog(*event):
+    action[0] = ""
+    message_control.text = ""
+    input_area.text = ""
+    menu_mode[0] = True
+    dialog_visible[0] = False
+    input_visible[0] = False
+    app.layout.focus(display_area)
 
 @kb.add('i', filter=Condition(lambda: menu_mode[0]))
 def tracker_info(*event):
@@ -719,15 +734,59 @@ def tracker_info(*event):
     # message_control.text = "Adding a new tracker..."
     # app.layout.focus(input_area)
 
-@kb.add('a', filter=Condition(lambda: menu_mode[0]))
-def add_tracker(*event):
+@kb.add('n', filter=Condition(lambda: menu_mode[0]))
+def new_tracker(*event):
     """Add a new tracker."""
-    action[0] = "add"
+    action[0] = "new"
     menu_mode[0] = False
     select_mode[0] = False
+    dialog_visible[0] = True
     input_visible[0] = True
-    message_control.text = "Adding a new tracker..."
+    message_control.text = " Enter the name for the new tracker"
+    logger.debug(f"action: {action[0]} getting tracker name ...")
     app.layout.focus(input_area)
+
+    input_area.accept_handler = lambda buffer: handle_input()
+
+    @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
+    def handle_input(event):
+        """Handle input when Enter is pressed."""
+        tracker_name = input_area.text.strip()
+        if tracker_name:
+            logger.debug(f"got tracker name: {tracker_name}")
+            tracker_manager.add_tracker(tracker_name)
+            input_area.text = ""
+            list_trackers()
+        else:
+            message_control.text = "No tracker name provided."
+
+
+@kb.add('c', filter=Condition(lambda: menu_mode[0]))
+def add_completion(*event):
+    action[0] = "complete"
+    logger.debug(f"action: '{action[0]}'")
+    menu_mode[0] = False
+    select_mode[0] = True
+    dialog_visible[0] = True
+    input_visible[0] = False
+    message_control.text = f"{key_msg} add completion."
+
+@kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
+def handle_completion(event):
+    """Handle input when Enter is pressed."""
+    completion_str = input_area.text.strip()
+    logger.debug(f"got completion_str: '{completion_str}' for {selected_id}")
+    if completion_str:
+        completion_dt = Tracker.parse_dt(completion_str)
+        logger.debug(f"recording completion_dt: '{completion_dt}' for {selected_id}")
+        tracker_manager.record_completion(selected_id, completion_dt)
+        # input_area.text = ""
+        # dialog_visible[0] = False
+        # input_visible[0] = False
+        close_dialog()
+    else:
+        display_area.text = "No completion datetime provided."
+    # app.layout.focus(display_area)
 
 @kb.add('d', filter=Condition(lambda: menu_mode[0]))
 def delete_tracker(*event):
@@ -767,57 +826,36 @@ def rename_tracker(*event):
 #     # if status in ['?', '']:   # message only
 #     #     show_message('Update Information', res, 2)
 
-def add_completion(self, completion_dt: datetime):
-    action[0] = "add"
-    menu_mode[0] = False
-    select_mode[0] = True
-    dialog_visible[0] = True
-    input_visible[0] = False
-    message_control.text = f"{key_msg} add completion."
-
-    # ok, msg = True, ""
-    # needs_sorting = False
-    # if self.history and self.history[-1] >= completion_dt:
-    #     print(f"""\
-    # The new completion datetime
-    #     {completion_dt}
-    # is earlier than the previous completion datetime
-    #     {self.history[-1]}.""")
-    #     res = input("Is this what you wanted? (y/N): ").strip()
-    #     if res.lower() not in ['y', 'yes']:
-    #         return False, "aborted"
-    #     needs_sorting = True
-
-    # self.history.append(completion_dt)
-    # if needs_sorting:
-    #     self.history.sort()
-    # if len(self.history) > Tracker.max_history:
-    #     self.history = self.history[-Tracker.max_history:]
-
-    # # Notify ZODB that this object has changed
-    # self._p_changed = True
-
-    return True, f"recorded completion for {completion_dt}"
-
+selected_id = None
 def select_tracker(event, key: str):
     """Generic tracker selection."""
+    global selected_id
     tracker = tracker_manager.get_tracker_from_label(key)
     if tracker:
         selected_id = tracker.doc_id
         if action[0] == "edit":
-            message_control.text = f"Editing tracker ID {selected_id}"
+            message_control.text = f"Editing tracker {tracker.name} ({selected_id})"
             dialog_visible[0] = True
             select_mode[0] = False
             input_visible[0] = True
             app.layout.focus(input_area)
         elif action[0] == "delete":
-            message_control.text = f"Deleting tracker ID {selected_id}"
+            message_control.text = f"Deleting tracker {tracker.name} ({selected_id})"
             select_mode[0] = False
-            # Execute delete logic here
+            tracker_manager.delete_tracker(selected_id)
+            list_trackers()
             app.layout.focus(display_area)
-        elif action[0] == "add":
-            message_control.text = f"Adding completion for tracker ID {selected_id}"
+        elif action[0] == "complete":
+            message_control.text = f"Enter the new completion datetime for {tracker.name} ({selected_id})"
+            # logger.debug(f"Entering the new completion datetime for {tracker.name} ({selected_id})")
             select_mode[0] = False
+            dialog_visible[0] = True
+            input_visible[0] = True
+            app.layout.focus(input_area)
+
+            input_area.accept_handler = lambda buffer: handle_completion()
+
+
             # Execute show logic here
         elif action[0] == "info":
             message_control.text = f"Showing tracker ID {selected_id}"
@@ -860,7 +898,7 @@ root_container = MenuContainer(
         MenuItem(
             'edit',
             children=[
-                MenuItem('n) add new tracker', handler=add_tracker),
+                MenuItem('n) add new tracker', handler=new_tracker),
                 MenuItem('c) add completion', handler=add_completion),
                 MenuItem('d) delete tracker', handler=delete_tracker),
                 MenuItem('e) edit completions', handler=edit_history),
@@ -886,76 +924,31 @@ app.layout.focus(root_container.body)
 
 tracker_manager = None
 
-import sys
-import logging
-
-# Console logging
-def setup_console_logging():
-    # Default logging level
-    log_level = logging.INFO
-
-    # Check if a logging level argument was provided
-    if len(sys.argv) > 1:
-        try:
-            # Convert the argument to an integer and set it as the logging level
-            log_level = int(sys.argv[1])
-        except ValueError:
-            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
-
-    # Configure logging
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    logging.info(f"Logging initialized at level {log_level}")
-
-# File logging
-def setup_file_logging():
-    log_level = logging.INFO
-
-    if len(sys.argv) > 1:
-        try:
-            log_level = int(sys.argv[1])
-        except ValueError:
-            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
-
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename="logs/tracker.log",  # Output to a file only
-        filemode="a"  # Append to the file
-    )
-    logging.info(f"Logging initialized at level {log_level}")
-
 
 def main():
     global tracker_manager
-    setup_file_logging()
     try:
         # TODO: use an environment variable or ~/.tracker/tracker.fs?
-        db_file = "/Users/dag/track/tracker.fs"
+        db_file = "/Users/dag/track-test/tracker.fs"
         logging.info(f"Starting TrackerManager with database file {db_file}")
         tracker_manager = TrackerManager(db_file)
 
         display_text = tracker_manager.list_trackers()
         logging.debug(f"Tracker list: {display_text}")
-        # print(display_text)
         display_message(display_text)
 
 
         start_periodic_checks()  # Start the periodic checks
         app.run()
     except Exception as e:
-        print(f"exception raised:\n{e}")
+        logger.debug(f"exception raised:\n{e}")
     else:
-        print("exited tracker", end="")
+        logger.debug("exited tracker", end="")
     finally:
         if tracker_manager:
             tracker_manager.close()
             logging.info(f"Closed TrackerManager and database file {db_file}")
-            # print(f" and closed\n  {db_file}")
+            # logger.debug(f" and closed\n  {db_file}")
         else:
             logging.info("TrackerManager was not initialized")
             print("")
