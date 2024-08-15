@@ -36,6 +36,7 @@ import time
 import textwrap
 import shutil
 import re
+import __version__ as version
 
 # Non-printing character
 NON_PRINTING_CHAR = '\u200B'
@@ -88,9 +89,12 @@ def setup_file_logging():
 setup_file_logging()
 logger = logging.getLogger()
 
-def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 3):
+logger.debug(f"version: {version.version}")
+
+def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 2):
     # Preprocess to replace spaces within specific "@\S" patterns with PLACEHOLDER
     text = preprocess_text(text)
+    numbered_list = re.compile(r'^\d+\.\s.*')
 
     # Split text into paragraphs
     paragraphs = text.split('\n')
@@ -107,7 +111,8 @@ def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] 
             subsequent_indent = initial_indent + ' ' * 2
         elif stripped_para.startswith(('@', '&')):
             subsequent_indent = initial_indent + ' ' * 3
-        elif stripped_para and stripped_para[0].isdigit():
+        # elif stripped_para and stripped_para[0].isdigit():
+        elif stripped_para and numbered_list.match(stripped_para):
             subsequent_indent = initial_indent + ' ' * 3
         else:
             subsequent_indent = initial_indent + ' ' * indent
@@ -199,11 +204,14 @@ class Tracker(Persistent):
                     days = hours // 24
                     hours = hours % 24
             if days:
-                until.append(f'{days} days')
+                days_str = 'days' if days > 1 else 'day'
+                until.append(f'{days} {days_str}')
             if hours:
-                until.append(f'{hours} hours')
+                hours_str = 'hours' if hours > 1 else 'hour'
+                until.append(f'{hours} {hours_str}')
             if minutes:
-                until.append(f'{minutes} minutes')
+                minutes_str = 'minutes' if minutes > 1 else 'minute'
+                until.append(f'{minutes} {minutes_str}')
             if not until:
                 until.append('0 minutes')
             ret = sign + ' '.join(until)
@@ -359,10 +367,11 @@ class Tracker(Persistent):
         if not hasattr(self, '_info') or self._info is None:
             self._info = self.compute_info()
         # insert a placeholder to prevent date and time from being split across multiple lines when wrapping
-        format_str = f"%Y-%m-%d{PLACEHOLDER}%H:%M"
-        wrapped_history = wrap(', '.join(x.strftime(format_str) for x in self.history))
-        return f"""\
- #{self.doc_id} {self.name}
+        format_str = f"%y-%m-%d{PLACEHOLDER}%H:%M"
+        history = ', '.join(x.strftime(format_str) for x in self.history)
+        return wrap(f"""\
+ {self.name}
+    doc_id: {self.doc_id}
     completions ({self._info['num_completions']}):
         last: {Tracker.format_dt(self._info['last_completion'])}
         next: {Tracker.format_dt(self._info['next_expected_completion'])}
@@ -371,8 +380,7 @@ class Tracker(Persistent):
         last: {Tracker.format_td(self._info['last_interval'])}
         change: {Tracker.format_td(self._info['change'])}
     history:
-        {wrapped_history}
-    """
+        {history}""", 0)
 
 class TrackerManager:
     labels = "abcdefghijklmnopqrstuvwxyz"
@@ -458,11 +466,12 @@ class TrackerManager:
         sorted_trackers = self.get_sorted_trackers()
         for tracker in sorted_trackers[start_index:end_index]:
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
-            next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
+            # next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
+            next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 10)
             label = TrackerManager.labels[count]
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             count += 1
-            rows.append(f" {label}   {next:<10} {tracker.name}")
+            rows.append(f" {label}   {next:<8}  {tracker.name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
