@@ -768,6 +768,7 @@ def new_tracker(*event):
             list_trackers()
         else:
             message_control.text = "No tracker name provided."
+            list_trackers()
 
 
 @kb.add('c', filter=Condition(lambda: menu_mode[0]))
@@ -875,6 +876,8 @@ def select_tracker(event, key: str):
             # Execute show logic here
             app.layout.focus(display_area)
         app.invalidate()
+    else:
+        list_trackers()
 
 # Bind all lowercase letters to select_tracker
 for key in string.ascii_lowercase:
@@ -952,7 +955,7 @@ def main():
     except Exception as e:
         logger.debug(f"exception raised:\n{e}")
     else:
-        logger.debug("exited tracker", end="")
+        logger.debug("exited tracker")
     finally:
         if tracker_manager:
             tracker_manager.close()
