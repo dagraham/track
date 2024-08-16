@@ -466,10 +466,10 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
         next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
         last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
         if next_dt:
-            return (2, next_dt)
+            return (0, next_dt)
         if last_dt:
             return (1, last_dt)
-        return (0, tracker.doc_id)
+        return (2, tracker.doc_id)
 
 
     def get_sorted_trackers(self):
