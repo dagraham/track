@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 from typing import List, Dict, Any, Callable, Mapping
 from prompt_toolkit import Application
-from prompt_toolkit.layout import Layout, HSplit
-from prompt_toolkit.layout.containers import Window, ConditionalContainer
+from prompt_toolkit.layout import Layout
+from prompt_toolkit.layout.containers import (
+    HSplit,
+    VSplit,
+    Window,
+    WindowAlign,
+    ConditionalContainer,
+)
+# from prompt_toolkit.layout.containers import Window, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.key_binding import KeyBindings
@@ -34,9 +41,10 @@ import os
 import time
 
 import textwrap
-import shutil
 import re
 import __version__ as version
+
+tracker_manager = None
 
 # Non-printing character
 NON_PRINTING_CHAR = '\u200B'
@@ -44,6 +52,17 @@ NON_PRINTING_CHAR = '\u200B'
 PLACEHOLDER = '\u00A0'
 # Placeholder for hyphens to prevent word breaks
 NON_BREAKING_HYPHEN = '\u2011'
+
+# For showing active page in pages, e.g.,  ○ ○ ⏺ ○ = page 3 of 4 pages
+OPEN_CIRCLE = '○'
+CLOSED_CIRCLE = '⏺'
+
+def page_banner(active_page_num: int, number_of_pages: int):
+    markers = []
+    for i in range(1, number_of_pages + 1):
+        marker = CLOSED_CIRCLE if i == active_page_num else OPEN_CIRCLE
+        markers.append(marker)
+    return ' '.join(markers)
 
 # Console logging
 def setup_console_logging():
@@ -169,7 +188,7 @@ def sort_key(tracker):
 
 # Tracker
 class Tracker(Persistent):
-    max_history = 10
+    max_history = 12 # depending on width, 6 rows of 2, 4 rows of 3, 3 rows of 4, 2 rows of 6
 
     @classmethod
     def format_dt(cls, dt: Any) -> str:
@@ -371,16 +390,16 @@ class Tracker(Persistent):
         history = ', '.join(x.strftime(format_str) for x in self.history)
         return wrap(f"""\
  {self.name}
-    doc_id: {self.doc_id}
-    completions ({self._info['num_completions']}):
-        last: {Tracker.format_dt(self._info['last_completion'])}
-        next: {Tracker.format_dt(self._info['next_expected_completion'])}
-    intervals ({self._info['num_intervals']}):
-        average: {Tracker.format_td(self._info['average_interval'])}
-        last: {Tracker.format_td(self._info['last_interval'])}
-        change: {Tracker.format_td(self._info['change'])}
-    history:
-        {history}""", 0)
+   doc_id: {self.doc_id}
+   completions ({self._info['num_completions']}):
+       last: {Tracker.format_dt(self._info['last_completion'])}
+       next: {Tracker.format_dt(self._info['next_expected_completion'])}
+   intervals ({self._info['num_intervals']}):
+       average: {Tracker.format_td(self._info['average_interval'])}
+       last: {Tracker.format_td(self._info['last_interval'])}
+       change: {Tracker.format_td(self._info['change'])}
+   history:
+       {history}""", 0)
 
 class TrackerManager:
     labels = "abcdefghijklmnopqrstuvwxyz"
@@ -432,7 +451,7 @@ class TrackerManager:
             display_message(msg)
             return
         display_message(f"""\
-    {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_info()}""")
+Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get_tracker_info()}""")
 
     # def get_tracker_data(self, doc_id: int = None):
     #     if doc_id is None:
@@ -445,10 +464,13 @@ class TrackerManager:
 
     def sort_key(self, tracker):
         next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
-        if next_dt is None:
-            return (0, tracker.doc_id)
-        else:
-            return (1, next_dt)
+        last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
+        if next_dt:
+            return (2, next_dt)
+        if last_dt:
+            return (1, last_dt)
+        return (0, tracker.doc_id)
+
 
     def get_sorted_trackers(self):
         # Extract the list of trackers
@@ -458,8 +480,9 @@ class TrackerManager:
 
     def list_trackers(self):
         num_pages = (len(self.trackers) + 25) // 26
-        page_banner = f" (page {self.active_page + 1}/{num_pages})"
-        banner = f" Tracker List{page_banner}\n"
+        # page_banner = f" (page {self.active_page + 1}/{num_pages})"
+        set_pages(page_banner(self.active_page + 1, num_pages))
+        banner = f" tag     next      last      tracker name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
@@ -467,13 +490,15 @@ class TrackerManager:
         sorted_trackers = self.get_sorted_trackers()
         for tracker in sorted_trackers[start_index:end_index]:
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
+            last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
             # next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
+            last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
             label = TrackerManager.labels[count]
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
-            rows.append(f" {label}   {next:<8}  {tracker.name}")
+            rows.append(f" {label}     {next:<8}  {last:<8}  {tracker.name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -670,6 +695,23 @@ dialog_container = ConditionalContainer(
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
 status_window = Window(content=status_control, height=1, style="class:status-window")
 
+page_control = FormattedTextControl(text="")
+page_window = Window(content=page_control, height=1, style="class:status-window", width=shutil.get_terminal_size()[0]//2, align=WindowAlign.LEFT)
+
+
+def set_pages(txt: str):
+    page_control.text = f"{txt} "
+
+
+status_area = VSplit(
+    [
+        status_window,
+        page_window,
+    ],
+    height=1,
+)
+
+
 def get_row_col():
     row_number = display_area.document.cursor_position_row
     col_number = display_area.document.cursor_position_col
@@ -734,7 +776,7 @@ def display_message(message):
 
 @kb.add('l', filter=Condition(lambda: menu_mode[0]))
 def list_trackers(*event):
-    """Add a new tracker."""
+    """List trackers."""
     action[0] = "list"
     menu_mode[0] = True
     select_mode[0] = False
@@ -744,6 +786,20 @@ def list_trackers(*event):
     # message_control.text = "Adding a new tracker..."
     app.layout.focus(display_area)
     app.invalidate()
+
+@kb.add('right', filter=Condition(lambda: menu_mode[0]))
+def next_page(*event):
+    logger.debug("next page")
+    tracker_manager.next_page()
+    list_trackers()
+
+@kb.add('left', filter=Condition(lambda: menu_mode[0]))
+def previous_page(*event):
+    logger.debug("previous page")
+    tracker_manager.previous_page()
+    list_trackers()
+
+
 
 def close_dialog(*event):
     action[0] = ""
@@ -805,6 +861,21 @@ def new_tracker(*event):
             message_control.text = "No tracker name provided."
             list_trackers()
 
+@kb.add('c-e')
+def add_example_trackers(*event):
+    for i in range(100):
+        tracker_manager.add_tracker(f"example {i+1}")
+    list_trackers()
+
+@kb.add('c-r')
+def del_example_trackers(*event):
+    remove = []
+    for id, tracker in tracker_manager.trackers.items():
+        if tracker.name.startswith('example'):
+            remove.append(id)
+    for id in remove:
+        tracker_manager.delete_tracker(id)
+    list_trackers()
 
 @kb.add('c', filter=Condition(lambda: menu_mode[0]))
 def add_completion(*event):
@@ -939,7 +1010,7 @@ body = HSplit([
     # menu_container,
     display_area,
     search_field,
-    status_window,
+    status_area,
     dialog_container,  # Conditional Input Area
 ])
 
