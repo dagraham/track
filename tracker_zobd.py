@@ -391,6 +391,7 @@ class TrackerManager:
         self.db_path = db_path
         self.trackers = {}
         self.label_to_id = {}
+        self.row_to_id = {}
         self.active_page = 0
         self.storage = FileStorage.FileStorage(self.db_path)
         self.db = DB(self.storage)
@@ -467,9 +468,10 @@ class TrackerManager:
         for tracker in sorted_trackers[start_index:end_index]:
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             # next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
-            next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 10)
+            next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
             label = TrackerManager.labels[count]
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
+            self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
             rows.append(f" {label}   {next:<8}  {tracker.name}")
         return banner +"\n".join(rows)
@@ -491,6 +493,12 @@ class TrackerManager:
         if pagelabel not in self.label_to_id:
             return None
         return self.trackers[self.label_to_id[pagelabel]]
+
+    def get_tracker_from_row(self, row: int):
+        pagerow = (self.active_page, row)
+        if pagerow not in self.row_to_id:
+            return None
+        return self.trackers[self.row_to_id[pagerow]]
 
     def save_data(self):
         self.root['trackers'] = self.trackers
@@ -662,6 +670,22 @@ dialog_container = ConditionalContainer(
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
 status_window = Window(content=status_control, height=1, style="class:status-window")
 
+def get_row_col():
+    row_number = display_area.document.cursor_position_row
+    col_number = display_area.document.cursor_position_col
+    return row_number, col_number
+
+def get_tracker_from_row()->int:
+    row = display_area.document.cursor_position_row
+    page = tracker_manager.active_page
+    id = tracker_manager.row_to_id.get((page, row), None)
+    logger.debug(f"{page = }, {row = } => {id = }")
+    if id is not None:
+        tracker = tracker_manager.get_tracker_from_id(id)
+    else:
+        tracker = None
+    return tracker
+
 def read_readme():
     try:
         with open("README.md", "r") as file:
@@ -733,12 +757,23 @@ def close_dialog(*event):
 @kb.add('i', filter=Condition(lambda: menu_mode[0]))
 def tracker_info(*event):
     """Show tracker information"""
+    tracker = get_tracker_from_row()
+    logger.debug(f"in tracker_info: {tracker = }")
     action[0] = "info"
-    menu_mode[0] = True
-    select_mode[0] = True
-    dialog_visible[0] = True
-    input_visible[0] = False
-    message_control.text = f"For information, {key_msg}"
+    if tracker:
+        logger.debug("got tracker from row, calling process_tracker")
+        menu_mode[0] = True
+        select_mode[0] = False
+        dialog_visible[0] = True
+        input_visible[0] = True
+        process_tracker(event, tracker)
+    else:
+        logger.debug("using label selection")
+        menu_mode[0] = True
+        select_mode[0] = True
+        dialog_visible[0] = True
+        input_visible[0] = False
+        message_control.text = f"For information, {key_msg}"
     # display_message(tracker_manager.list_trackers())
     # message_control.text = "Adding a new tracker..."
     # app.layout.focus(input_area)
@@ -837,12 +872,26 @@ def rename_tracker(*event):
 #     #     show_message('Update Information', res, 2)
 
 selected_id = None
-def select_tracker(event, key: str):
+def select_tracker_from_label(event, key: str):
     """Generic tracker selection."""
     global selected_id
     tracker = tracker_manager.get_tracker_from_label(key)
+    selected_id = tracker.doc_id
     if tracker:
+        logger.debug("got tracker from label, calling process_tracker")
         selected_id = tracker.doc_id
+        select_mode[0] = False
+        process_tracker(event, tracker)
+    else:
+        list_trackers()
+
+def process_tracker(event, tracker: Tracker = None):
+    global selected_id
+    logger.debug("in process_tracker")
+    if tracker:
+        logger.debug("   with tracker")
+        selected_id = tracker.doc_id
+        logger.debug(f"{action[0] = }; {selected_id = }")
         if action[0] == "edit":
             message_control.text = f"Editing tracker {tracker.name} ({selected_id})"
             dialog_visible[0] = True
@@ -862,26 +911,26 @@ def select_tracker(event, key: str):
             dialog_visible[0] = True
             input_visible[0] = True
             app.layout.focus(input_area)
-
             input_area.accept_handler = lambda buffer: handle_completion()
-
-
-            # Execute show logic here
         elif action[0] == "info":
+            logger.debug(f"in 'info' ")
             message_control.text = f"Showing tracker ID {selected_id}"
             select_mode[0] = False
             dialog_visible[0] = False
             input_visible[0] = False
+            info = tracker.get_tracker_info()
+            logger.debug(f"{info = }")
             display_message(tracker.get_tracker_info())
-            # Execute show logic here
             app.layout.focus(display_area)
         app.invalidate()
     else:
         list_trackers()
 
 # Bind all lowercase letters to select_tracker
-for key in string.ascii_lowercase:
-    kb.add(key, filter=Condition(lambda: select_mode[0]))(lambda event, key=key: select_tracker(event, key))
+keys = list(string.ascii_lowercase)
+keys.append('escape')
+for key in keys:
+    kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: select_tracker_from_label(event, key))
 
 # Layout
 
