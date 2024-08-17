@@ -16,6 +16,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.styles import Style
 from prompt_toolkit.styles.named_colors import NAMED_COLORS
+from prompt_toolkit.lexers import Lexer
 from datetime import datetime, timedelta, date
 from prompt_toolkit.widgets import (
     TextArea,
@@ -479,6 +480,7 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
         return sorted(trackers, key=self.sort_key)
 
     def list_trackers(self):
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%y-%m-%d")
         num_pages = (len(self.trackers) + 25) // 26
         # page_banner = f" (page {self.active_page + 1}/{num_pages})"
         set_pages(page_banner(self.active_page + 1, num_pages))
@@ -495,10 +497,11 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
             last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
             label = TrackerManager.labels[count]
+            prefix = NON_PRINTING_CHAR if next and next <= tomorrow else ""
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
-            rows.append(f" {label}     {next:<8}  {last:<8}  {tracker.name}")
+            rows.append(f"{prefix} {label}     {next:<8}  {last:<8}  {tracker.name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -664,7 +667,8 @@ indent = "   "
 # NOTE: zero-width space - to mark trackers with next <= today+oneday
 BEF = '\u200B'
 
-display_area = TextArea(text="initializing ...", read_only=True, search_field=search_field, style="class:display-area")
+display_area = TextArea(text="", read_only=True, search_field=search_field, style="class:display-area")
+# display_area = TextArea(text="", read_only=True, search_field=search_field, lexer=ListLexer())
 
 input_area = TextArea(focusable=True, multiline=True, height=3, prompt='> ', style="class:input-area")
 

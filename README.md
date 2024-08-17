@@ -11,7 +11,7 @@ The goal of *track* is to save you trouble of going through this iterative proce
 3. The next time you need to fill the feeders, repeat the process described in step 2. At this point, you will have two datetimes in the history of the tracker and track will calculate the interval between them and set the "expected next completion" by adding the interval to last completion date and time.
 4. The process repeats with each completion. There are only two differences when there are more than 2 completions:
    - The "expected next completion" is calculated by adding the *average* of the intervals to the last completion date and time.
-   - If there are more than 10 completions, only the last 10 completions are used to calculate the average interval. The estimated next completion date and time is thus based only on the most recent 10 completions.
+   - If there are more than 12 completions, only the last 12 completions are used to calculate the average interval. The estimated next completion date and time is thus based only on the most recent 12 completions.
 
 
 
