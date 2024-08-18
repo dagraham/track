@@ -264,10 +264,11 @@ class Tracker(Persistent):
         else:
             return None
 
-    def __init__(self, name: str, doc_id: int) -> None:
+    def __init__(self, name: str, doc_id: int, flag_after: int=0) -> None:
         self.doc_id = int(doc_id)
         self.name = name
         self.history = []
+        self.flag_after = max(0, flag_after) # flag_after
         logger.debug(f"Created tracker {self.name} ({self.doc_id})")
 
 
@@ -287,6 +288,8 @@ class Tracker(Persistent):
     def compute_info(self):
         # Example computation based on history, returning a dict
         result = {}
+        if not self.flag_after:
+            self.flag_after = 0
         if not self.history:
             result = dict(last_completion=None, num_completions=0, num_intervals=0, average_interval=timedelta(minutes=0), last_interval=timedelta(minutes=0), change=timedelta(minutes=0), next_expected_completion=None)
         else:
@@ -389,6 +392,8 @@ class Tracker(Persistent):
     def get_tracker_info(self):
         if not hasattr(self, '_info') or self._info is None:
             self._info = self.compute_info()
+        if not hasattr(self, 'flag_after') or not getattr(self, 'flag_after'):
+            self.flag_after = 0
         # insert a placeholder to prevent date and time from being split across multiple lines when wrapping
         format_str = f"%y-%m-%d{PLACEHOLDER}%H:%M"
         history = ', '.join(x.strftime(format_str) for x in self.history)
@@ -403,7 +408,8 @@ class Tracker(Persistent):
        last: {Tracker.format_td(self._info['last_interval'])}
        change: {Tracker.format_td(self._info['change'])}
    history:
-       {history}""", 0)
+       {history}
+   flag_after: {self.flag_after}""", 0)
 
 class TrackerManager:
     labels = "abcdefghijklmnopqrstuvwxyz"
@@ -428,7 +434,7 @@ class TrackerManager:
             if 'settings' not in self.root:
                 self.root['settings'] = {}
                 self.root['settings']['next_days'] = 1
-                self.root['settings']['last_days'] = 7
+                self.root['settings']['flag_after'] = 7
                 self.root['settings']['ampm'] = True
                 self.root['settings']['yearfirst'] = True
                 self.root['settings']['dayfirst'] = False
@@ -446,7 +452,7 @@ class TrackerManager:
 
     def update_dates(self):
         self.next_date = (datetime.now() + timedelta(days=self.settings['next_days'])).strftime("%y-%m-%d")
-        self.last_date = (datetime.now() - timedelta(days=self.settings['last_days'])).strftime("%y-%m-%d") if self.settings['last_days'] != 0 else None
+        self.last_date = (datetime.now() - timedelta(days=self.settings['flag_after'])).strftime("%y-%m-%d") if self.settings['flag_after'] != 0 else None
 
     def set_setting(self, key, value):
         if key in self.settings:
@@ -460,10 +466,11 @@ class TrackerManager:
     def get_setting(self, key):
         return self.settings.get(key, None)
 
-    def add_tracker(self, name: str, last_days: int = 0) -> None:
+    def add_tracker(self, name: str, flag_after: int = 0) -> None:
         doc_id = self.root['next_id']
         # Create a new tracker with the current doc_id
-        tracker = Tracker(name, doc_id)
+        flag_after = max(0, flag_after)
+        tracker = Tracker(name, doc_id, flag_after)
         # Add the tracker to the trackers dictionary
         self.trackers[doc_id] = tracker
         # Increment the next_id for the next tracker
@@ -619,7 +626,7 @@ tracker_style = {
 class TrackerLexer(Lexer):
     def __init__(self):
         self.next_date = (datetime.now() + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
-        self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['last_days'])).strftime("%y-%m-%d")
+        self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['flag_after'])).strftime("%y-%m-%d")
 
     def lex_document(self, document):
         lines = document.lines
@@ -1005,10 +1012,20 @@ def new_tracker(*event):
     @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
     def handle_input(event):
         """Handle input when Enter is pressed."""
-        tracker_name = input_area.text.strip()
+        parts = [x.strip() for x in input_area.text.split('@')]
+        tracker_name = parts[0]
+        if len(parts) > 1:
+            try:
+                flag_after = int(parts[1])
+            except ValueError:
+                flag_after = 0
+
         if tracker_name:
             logger.debug(f"got tracker name: {tracker_name}")
-            tracker_manager.add_tracker(tracker_name)
+            tracker_manager.add_tracker(
+                name=tracker_name,
+                flag_after=flag_after
+                )
             input_area.text = ""
             list_trackers()
         else:
