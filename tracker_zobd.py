@@ -17,6 +17,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.styles import Style
 from prompt_toolkit.styles.named_colors import NAMED_COLORS
 from prompt_toolkit.lexers import Lexer
+
 from datetime import datetime, timedelta, date
 from prompt_toolkit.widgets import (
     TextArea,
@@ -422,6 +423,15 @@ class TrackerManager:
 
     def load_data(self):
         try:
+            if 'settings' not in self.root:
+                self.root['settings'] = {}
+                self.root['settings']['next_days'] = 1
+                self.root['settings']['last_days'] = 7
+                self.root['settings']['ampm'] = True
+                self.root['settings']['yearfirst'] = True
+                self.root['settings']['dayfirst'] = False
+                transaction.commit()
+            self.settings = self.root['settings']
             if 'trackers' not in self.root:
                 self.root['trackers'] = {}
                 self.root['next_id'] = 1  # Initialize the ID counter
@@ -430,6 +440,23 @@ class TrackerManager:
         except Exception as e:
             logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
+        self.update_dates()
+
+    def update_dates(self):
+        self.next_date = (datetime.now() + timedelta(days=self.settings['next_days'])).strftime("%y-%m-%d")
+        self.last_date = (datetime.now() - timedelta(days=self.settings['last_days'])).strftime("%y-%m-%d") if self.settings['last_days'] != 0 else None
+
+    def set_setting(self, key, value):
+        if key in self.settings:
+            self.settings[key] = value
+            self.zodb_root[0] = self.settings  # Update the ZODB storage
+            transaction.commit()
+            self.update_dates()  # Refresh dates if needed
+        else:
+            print(f"Setting '{key}' not found.")
+
+    def get_setting(self, key):
+        return self.settings.get(key, None)
 
     def add_tracker(self, name: str) -> None:
         doc_id = self.root['next_id']
@@ -484,7 +511,7 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
         num_pages = (len(self.trackers) + 25) // 26
         # page_banner = f" (page {self.active_page + 1}/{num_pages})"
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f" tag     next      last      tracker name\n"
+        banner = f"tag      next       last     tracker name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
@@ -497,11 +524,11 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
             last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
             label = TrackerManager.labels[count]
-            prefix = NON_PRINTING_CHAR if next and next <= tomorrow else ""
+            # prefix = NON_PRINTING_CHAR if next and next <= tomorrow else ""
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
-            rows.append(f"{prefix} {label}     {next:<8}  {last:<8}  {tracker.name}")
+            rows.append(f" {label}    {next:<8}  {last:<8}  {tracker.name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -515,6 +542,9 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
 
     def previous_page(self):
         self.set_active_page(self.active_page - 1)
+
+    def first_page(self):
+        self.set_active_page(0)
 
     def get_tracker_from_label(self, label: str):
         pagelabel = (self.active_page, label)
@@ -570,6 +600,90 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
         finally:
             self.connection.close()
 
+db_file = "/Users/dag/track-test/tracker.fs"
+tracker_manager = TrackerManager(db_file)
+
+tracker_style = {
+    'next-less': 'fg:lightskyblue',
+    'next-more': '',
+    'last-less': 'fg:lightskyblue',
+    'last-more': '',
+    'no-dates': '',
+    'default': '',
+    'banner': 'fg:limegreen',
+    'tag': 'fg:gray',
+}
+
+class TrackerLexer(Lexer):
+    def __init__(self):
+        self.next_date = (datetime.now() + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
+        self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['last_days'])).strftime("%y-%m-%d")
+
+    def lex_document(self, document):
+        lines = document.lines
+        def get_line_tokens(line_number):
+            line = lines[line_number]
+            tokens = []
+
+            if line and line[0] == ' ':  # does line start with a space
+                parts = line.split()
+                if len(parts) < 4:
+                    return [(tracker_style.get('default', ''), line)]
+
+                # Extract the parts of the line
+                tag, next_date, last_date, tracker_name = parts[0], parts[1], parts[2], " ".join(parts[3:])
+
+                # Determine styles based on dates
+                if next_date != "~" and next_date <= self.next_date:
+                    next_style = tracker_style.get('next-less', '')
+                    last_style = tracker_style.get('default', '')
+                    name_style = next_style
+                elif next_date != "~" and next_date > self.next_date:
+                    next_style = tracker_style.get('next-more', '')
+                    last_style = tracker_style.get('default', '')
+                    name_style = next_style
+                elif next_date == "~" and last_date != "~" and last_date <= self.last_date:
+                    next_style = tracker_style.get('default', '')
+                    last_style = tracker_style.get('last-less', '')
+                    name_style = last_style
+                elif next_date == "~" and last_date != "~" and last_date > self.last_date:
+                    next_style = tracker_style.get('default', '')
+                    last_style = tracker_style.get('last-more', '')
+                    name_style = last_style
+                elif next_date == "~" and last_date == "~":
+                    next_style = tracker_style.get('no-dates', '')
+                    last_style = tracker_style.get('no-dates', '')
+                    name_style = tracker_style.get('default', '')
+                else:
+                    next_style = tracker_style.get('default', '')
+                    last_style = tracker_style.get('default', '')
+                name_style = tracker_style.get('default', '')
+
+                # Format each part with fixed width
+                tag_formatted = f" {tag:<5} "  # 7 spaces for tag
+                next_formatted = f"{next_date:^8}   "  # 10 spaces for next date
+                last_formatted = f"{last_date:^8}   "  # 10 spaces for last date
+
+                # Add the styled parts to the tokens list
+                tokens.append((tracker_style.get('tag', ''), tag_formatted))
+                tokens.append((next_style, next_formatted))
+                tokens.append((last_style, last_formatted))
+                tokens.append((name_style, tracker_name))
+                # tokens.append((tracker_style.get('default', ''), tracker_name))
+
+            else:
+                # For lines that don't start with a space, use the default style
+                tokens.append((tracker_style.get('banner', ''), line))
+
+            logger.debug(f"tokens: {tokens}")
+            return tokens
+
+        return get_line_tokens
+
+    @staticmethod
+    def _parse_date(date_str):
+        return datetime.strptime(date_str, "%y-%m-%d")
+
 freq = 12
 
 def format_statustime(obj, freq: int = 0):
@@ -608,6 +722,7 @@ style = Style.from_dict({
 
 def check_alarms():
     """Periodic task to check alarms."""
+    today = datetime.now().strftime("%y-%m-%d")
     while True:
         f = freq  # Interval (e.g., 6, 12, 30, 60 seconds)
         s = int(datetime.now().second)
@@ -618,6 +733,10 @@ def check_alarms():
         current_time = format_statustime(ct, freq)
         message = f"{current_time}"
         update_status(message)
+        newday = ct.strftime("%y-%m-%d")
+        if newday != today:
+            tracker_manager.update_dates()
+            today = newday
 
 def update_status(new_message):
     status_control.text = new_message
@@ -667,8 +786,13 @@ indent = "   "
 # NOTE: zero-width space - to mark trackers with next <= today+oneday
 BEF = '\u200B'
 
-display_area = TextArea(text="", read_only=True, search_field=search_field, style="class:display-area")
-# display_area = TextArea(text="", read_only=True, search_field=search_field, lexer=ListLexer())
+tracker_lexer = TrackerLexer()
+
+display_area = TextArea(text="", read_only=True, search_field=search_field, lexer=tracker_lexer)
+
+tracker_manager.update_dates()               # Recalculate dates
+tracker_lexer.next_date = tracker_manager.next_date
+tracker_lexer.last_date = tracker_manager.last_date
 
 input_area = TextArea(focusable=True, multiline=True, height=3, prompt='> ', style="class:input-area")
 
@@ -740,6 +864,7 @@ def read_readme():
         return "README.md file not found."
 
 # Application Setup
+
 kb = KeyBindings()
 
 key_msg = "enter the letter for the tracker row."
@@ -801,6 +926,12 @@ def next_page(*event):
 def previous_page(*event):
     logger.debug("previous page")
     tracker_manager.previous_page()
+    list_trackers()
+
+@kb.add('space', filter=Condition(lambda: menu_mode[0]))
+def first_page(*event):
+    logger.debug("first page")
+    tracker_manager.first_page()
     list_trackers()
 
 
@@ -1058,16 +1189,12 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-tracker_manager = None
-
 
 def main():
-    global tracker_manager
+    # global tracker_manager
     try:
         # TODO: use an environment variable or ~/.tracker/tracker.fs?
-        db_file = "/Users/dag/track-test/tracker.fs"
-        logging.info(f"Starting TrackerManager with database file {db_file}")
-        tracker_manager = TrackerManager(db_file)
+        logging.info(f"Started TrackerManager with database file {db_file}")
 
         display_text = tracker_manager.list_trackers()
         logging.debug(f"Tracker list: {display_text}")
