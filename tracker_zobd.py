@@ -6,9 +6,11 @@ from prompt_toolkit.layout.containers import (
     HSplit,
     VSplit,
     Window,
+    DynamicContainer,
     WindowAlign,
     ConditionalContainer,
 )
+from prompt_toolkit.layout.dimension import D
 # from prompt_toolkit.layout.containers import Window, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.keys import Keys
@@ -458,7 +460,7 @@ class TrackerManager:
     def get_setting(self, key):
         return self.settings.get(key, None)
 
-    def add_tracker(self, name: str) -> None:
+    def add_tracker(self, name: str, last_days: int = 0) -> None:
         doc_id = self.root['next_id']
         # Create a new tracker with the current doc_id
         tracker = Tracker(name, doc_id)
@@ -794,19 +796,36 @@ tracker_manager.update_dates()               # Recalculate dates
 tracker_lexer.next_date = tracker_manager.next_date
 tracker_lexer.last_date = tracker_manager.last_date
 
-input_area = TextArea(focusable=True, multiline=True, height=3, prompt='> ', style="class:input-area")
+# input_area = TextArea(focusable=True, multiline=True, height=2, prompt='> ', style="class:input-area")
+input_area = TextArea(
+    focusable=True,
+    multiline=True,
+    prompt='> ',
+    height=D(preferred=3, max=10),  # Set preferred and max height
+    style="class:input-area"
+)
+
+dynamic_input_area = DynamicContainer(lambda: input_area)
 
 dialog_visible = [False]
 input_visible = [False]
 action = [None]
 
 input_container = ConditionalContainer(
-    content=input_area,
+    content=dynamic_input_area,
     filter=Condition(lambda: input_visible[0])
 )
 
 message_control = FormattedTextControl(text="")
-message_window = Window(content=message_control, height=1, style="class:message-window")
+
+message_window = DynamicContainer(
+    lambda: Window(
+        content=message_control,
+        height=D(preferred=1, max=10),  # Adjust max height as needed
+        style="class:message-window"
+    )
+)
+# message_window = Window(content=message_control, height=2, style="class:message-window")
 
 dialog_area = HSplit(
         [
@@ -977,7 +996,7 @@ def new_tracker(*event):
     select_mode[0] = False
     dialog_visible[0] = True
     input_visible[0] = True
-    message_control.text = " Enter the name for the new tracker"
+    message_control.text = wrap(" Enter the name for the new tracker. Append @ followed by an integer number of days to flag this tracker when this number of days has passed since the last completion.", 0)
     logger.debug(f"action: {action[0]} getting tracker name ...")
     app.layout.focus(input_area)
 
