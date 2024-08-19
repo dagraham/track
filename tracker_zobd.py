@@ -56,6 +56,8 @@ NON_PRINTING_CHAR = '\u200B'
 PLACEHOLDER = '\u00A0'
 # Placeholder for hyphens to prevent word breaks
 NON_BREAKING_HYPHEN = '\u2011'
+# Placeholder for zero-width non-joiner
+ZWNJ = '\u200C'
 
 # For showing active page in pages, e.g.,  ○ ○ ⏺ ○ = page 3 of 4 pages
 OPEN_CIRCLE = '○'
@@ -213,7 +215,7 @@ class Tracker(Persistent):
         sign = '' if td.total_seconds() >= 0 else '-'
         total_seconds = abs(int(td.total_seconds()))
         if total_seconds == 0:
-            return ' 0 minutes '
+            return '0 minutes '
         total_seconds = abs(total_seconds)
         try:
             until = []
@@ -264,11 +266,12 @@ class Tracker(Persistent):
         else:
             return None
 
-    def __init__(self, name: str, doc_id: int, flag_after: int=0) -> None:
+    def __init__(self, name: str, doc_id: int) -> None:
         self.doc_id = int(doc_id)
         self.name = name
         self.history = []
-        self.flag_after = max(0, flag_after) # flag_after
+        self.created = datetime.now()
+        self.modifed = self.created
         logger.debug(f"Created tracker {self.name} ({self.doc_id})")
 
 
@@ -276,20 +279,13 @@ class Tracker(Persistent):
     def info(self):
         # Lazy initialization with re-computation logic
         if not hasattr(self, '_info') or self._info is None:
+            logger.debug(f"Computing info for {self.name} ({self.doc_id})")
             self._info = self.compute_info()
         return self._info
-
-    # @info.setter
-    # def info(self, value):
-    #     # This setter could be used if you want to manually set it
-    #     self._info = value
-    #     self._p_changed = True  # Mark the object as changed in ZODB
 
     def compute_info(self):
         # Example computation based on history, returning a dict
         result = {}
-        if not self.flag_after:
-            self.flag_after = 0
         if not self.history:
             result = dict(last_completion=None, num_completions=0, num_intervals=0, average_interval=timedelta(minutes=0), last_interval=timedelta(minutes=0), change=timedelta(minutes=0), next_expected_completion=None)
         else:
@@ -297,15 +293,19 @@ class Tracker(Persistent):
             result['num_completions'] = len(self.history)
             intervals = []
             result['num_intervals'] = 0
-            result['change'] = result['average_interval'] = result['last_interval'] = None
+            result['change'] = None
+            result['last_interval'] = None
+            result['average_interval'] = ""
             result['next_expected_completion'] = None
             if result['num_completions'] > 0:
                 intervals = [self.history[i+1] - self.history[i] for i in range(len(self.history) - 1)]
                 result['num_intervals'] = len(intervals)
             if result['num_intervals'] > 0:
                 result['last_interval'] = intervals[-1]
-            if result['num_intervals'] > 1:
-                result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
+                if result['num_intervals'] == 1:
+                    result['average_interval'] = intervals[-1]
+                else:
+                    result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
                 result['next_expected_completion'] = result['last_completion'] + result['average_interval']
             if result['num_intervals'] > 2:
                 if result['last_interval'] >= result['average_interval']:
@@ -319,6 +319,7 @@ class Tracker(Persistent):
     # XXX: Just for reference
     def add_to_history(self, new_event):
         self.history.append(new_event)
+        self.modifed = datetime.now()
         self.invalidate_info()
         self._p_changed = True  # Mark object as changed in ZODB
 
@@ -337,6 +338,7 @@ class Tracker(Persistent):
 
         # Notify ZODB that this object has changed
         self.invalidate_info()
+        self.modifed = datetime.now()
         self._p_changed = True
         return True, f"recorded completion for {completion_dt}"
 
@@ -383,7 +385,9 @@ class Tracker(Persistent):
                 self.history = self.history[-self.max_history:]
 
             # Notify ZODB that this object has changed
+            self.modifed = datetime.now()
             self.update_tracker_info()
+            self.invalidate_info()
             self._p_changed = True
 
         except ValueError:
@@ -392,24 +396,24 @@ class Tracker(Persistent):
     def get_tracker_info(self):
         if not hasattr(self, '_info') or self._info is None:
             self._info = self.compute_info()
-        if not hasattr(self, 'flag_after') or not getattr(self, 'flag_after'):
-            self.flag_after = 0
         # insert a placeholder to prevent date and time from being split across multiple lines when wrapping
         format_str = f"%y-%m-%d{PLACEHOLDER}%H:%M"
-        history = ', '.join(x.strftime(format_str) for x in self.history)
+        history = ', '.join(x.strftime(format_str) for x in self.history) if self.history else "None"
         return wrap(f"""\
- {self.name}
-   doc_id: {self.doc_id}
-   completions ({self._info['num_completions']}):
-       last: {Tracker.format_dt(self._info['last_completion'])}
-       next: {Tracker.format_dt(self._info['next_expected_completion'])}
-   intervals ({self._info['num_intervals']}):
-       average: {Tracker.format_td(self._info['average_interval'])}
-       last: {Tracker.format_td(self._info['last_interval'])}
-       change: {Tracker.format_td(self._info['change'])}
-   history:
-       {history}
-   flag_after: {self.flag_after}""", 0)
+{ZWNJ} {self.name}
+ metadata:
+    doc_id:{self.doc_id}
+    created:  {Tracker.format_dt(self.created)}
+    modified: {Tracker.format_dt(self.modifed)}
+ completions ({self._info['num_completions']}):
+    last:     {Tracker.format_dt(self._info['last_completion'])}
+    next:     {Tracker.format_dt(self._info['next_expected_completion'])}
+ intervals ({self._info['num_intervals']}):
+    last:     {Tracker.format_td(self._info['last_interval'])}
+    average:  {Tracker.format_td(self._info['average_interval'])}
+    change:   {Tracker.format_td(self._info['change'])}
+ history:
+    {history}""", 0)
 
 class TrackerManager:
     labels = "abcdefghijklmnopqrstuvwxyz"
@@ -426,6 +430,7 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
+        self.next_first = False
         logger.debug(f"opened tracker manager using data from\n  {self.db_path}")
         self.load_data()
 
@@ -434,7 +439,7 @@ class TrackerManager:
             if 'settings' not in self.root:
                 self.root['settings'] = {}
                 self.root['settings']['next_days'] = 1
-                self.root['settings']['flag_after'] = 7
+                # self.root['settings']['flag_after'] = 7
                 self.root['settings']['ampm'] = True
                 self.root['settings']['yearfirst'] = True
                 self.root['settings']['dayfirst'] = False
@@ -452,7 +457,7 @@ class TrackerManager:
 
     def update_dates(self):
         self.next_date = (datetime.now() + timedelta(days=self.settings['next_days'])).strftime("%y-%m-%d")
-        self.last_date = (datetime.now() - timedelta(days=self.settings['flag_after'])).strftime("%y-%m-%d") if self.settings['flag_after'] != 0 else None
+        # self.last_date = (datetime.now() - timedelta(days=self.settings['flag_after'])).strftime("%y-%m-%d") if self.settings['flag_after'] != 0 else None
 
     def set_setting(self, key, value):
         if key in self.settings:
@@ -466,11 +471,10 @@ class TrackerManager:
     def get_setting(self, key):
         return self.settings.get(key, None)
 
-    def add_tracker(self, name: str, flag_after: int = 0) -> None:
+    def add_tracker(self, name: str) -> None:
         doc_id = self.root['next_id']
         # Create a new tracker with the current doc_id
-        flag_after = max(0, flag_after)
-        tracker = Tracker(name, doc_id, flag_after)
+        tracker = Tracker(name, doc_id)
         # Add the tracker to the trackers dictionary
         self.trackers[doc_id] = tracker
         # Increment the next_id for the next tracker
@@ -502,12 +506,18 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
     def sort_key(self, tracker):
         next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
         last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
-        if next_dt:
-            return (0, next_dt)
-        if last_dt:
-            return (1, last_dt)
-        return (2, tracker.doc_id)
-
+        if self.next_first:
+            if next_dt:
+                return (0, next_dt)
+            if last_dt:
+                return (1, last_dt)
+            return (2, tracker.doc_id)
+        else:
+            if next_dt:
+                return (2, next_dt)
+            if last_dt:
+                return (1, last_dt)
+            return (0, tracker.doc_id)
 
     def get_sorted_trackers(self):
         # Extract the list of trackers
@@ -518,26 +528,27 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
     def list_trackers(self):
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%y-%m-%d")
         num_pages = (len(self.trackers) + 25) // 26
-        # page_banner = f" (page {self.active_page + 1}/{num_pages})"
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"tag      next       last     tracker name\n"
+        banner = f"{ZWNJ} tag     next       last     tracker name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
         end_index = start_index + 26
         sorted_trackers = self.get_sorted_trackers()
         for tracker in sorted_trackers[start_index:end_index]:
+            logger.debug(f"{tracker.doc_id}: {tracker.name}")
+            parts = [x.strip() for x in tracker.name.split('@')]
+            tracker_name = parts[0]
+            flag_after = parts[1] if len(parts) > 1 else 0
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
-            # next = next_dt.strftime("%a %b %-d") if next_dt else center_text("~", 10)
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
             last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
             label = TrackerManager.labels[count]
-            # prefix = NON_PRINTING_CHAR if next and next <= tomorrow else ""
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
-            rows.append(f" {label}    {next:<8}  {last:<8}  {tracker.name}")
+            rows.append(f"  {label}    {next:<8}  {last:<8}  {tracker_name}@ {flag_after}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -623,10 +634,15 @@ tracker_style = {
     'tag': 'fg:gray',
 }
 
+banner_regex = re.compile(r'^\u200C')
+
+
 class TrackerLexer(Lexer):
     def __init__(self):
-        self.next_date = (datetime.now() + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
-        self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['flag_after'])).strftime("%y-%m-%d")
+        now = datetime.now()
+        self.next_date = (now + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
+        self.last_date = now
+        # self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['flag_after'])).strftime("%y-%m-%d")
 
     def lex_document(self, document):
         lines = document.lines
@@ -635,7 +651,11 @@ class TrackerLexer(Lexer):
             tokens = []
 
             if line and line[0] == ' ':  # does line start with a space
-                parts = line.split()
+                at_parts = line.split('@')
+                parts = at_parts[0].split()
+                if len(at_parts) > 1:
+                    flag_after = int(at_parts[1])
+                    self.last_date = (datetime.now() - timedelta(days=flag_after)).strftime("%y-%m-%d")
                 if len(parts) < 4:
                     return [(tracker_style.get('default', ''), line)]
 
@@ -680,10 +700,11 @@ class TrackerLexer(Lexer):
                 tokens.append((name_style, tracker_name))
                 # tokens.append((tracker_style.get('default', ''), tracker_name))
 
-            else:
-                # For lines that don't start with a space, use the default style
-                tokens.append((tracker_style.get('banner', ''), line))
 
+            elif banner_regex.match(line):
+                tokens.append((tracker_style.get('banner', ''), line))
+            else:
+                tokens.append((tracker_style.get('default', ''), line))
             logger.debug(f"tokens: {tokens}")
             return tokens
 
@@ -801,14 +822,14 @@ display_area = TextArea(text="", read_only=True, search_field=search_field, lexe
 
 tracker_manager.update_dates()               # Recalculate dates
 tracker_lexer.next_date = tracker_manager.next_date
-tracker_lexer.last_date = tracker_manager.last_date
+# tracker_lexer.last_date = tracker_manager.last_date
 
 # input_area = TextArea(focusable=True, multiline=True, height=2, prompt='> ', style="class:input-area")
 input_area = TextArea(
     focusable=True,
     multiline=True,
     prompt='> ',
-    height=D(preferred=3, max=10),  # Set preferred and max height
+    height=D(preferred=1, max=10),  # Set preferred and max height
     style="class:input-area"
 )
 
@@ -847,10 +868,14 @@ dialog_container = ConditionalContainer(
 )
 
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
-status_window = Window(content=status_control, height=1, style="class:status-window")
+status_window = Window(content=status_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.LEFT)
 
 page_control = FormattedTextControl(text="")
-page_window = Window(content=page_control, height=1, style="class:status-window", width=shutil.get_terminal_size()[0]//2, align=WindowAlign.LEFT)
+page_window = Window(content=page_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.CENTER)
+
+right_control = FormattedTextControl(text="")
+right_window = Window(content=right_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.RIGHT)
+right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
 
 
 def set_pages(txt: str):
@@ -861,6 +886,7 @@ status_area = VSplit(
     [
         status_window,
         page_window,
+        right_window
     ],
     height=1,
 )
@@ -960,7 +986,12 @@ def first_page(*event):
     tracker_manager.first_page()
     list_trackers()
 
-
+@kb.add('r', filter=Condition(lambda: menu_mode[0]))
+def reverse_sort(*event):
+    tracker_manager.next_first = not tracker_manager.next_first
+    right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
+    # right_control.text = "next first " if tracker_manager.next_first else "next last "
+    list_trackers()
 
 def close_dialog(*event):
     action[0] = ""
@@ -1014,6 +1045,7 @@ def new_tracker(*event):
         """Handle input when Enter is pressed."""
         parts = [x.strip() for x in input_area.text.split('@')]
         tracker_name = parts[0]
+        flag_after = None
         if len(parts) > 1:
             try:
                 flag_after = int(parts[1])
@@ -1021,10 +1053,11 @@ def new_tracker(*event):
                 flag_after = 0
 
         if tracker_name:
-            logger.debug(f"got tracker name: {tracker_name}")
+            logger.debug(f"got tracker name: {tracker_name}, flag_after: {flag_after}")
+            if flag_after and flag_after > 0:
+                tracker_name=f"{tracker_name} @{flag_after}"
             tracker_manager.add_tracker(
                 name=tracker_name,
-                flag_after=flag_after
                 )
             input_area.text = ""
             list_trackers()
@@ -1211,8 +1244,9 @@ root_container = MenuContainer(
         MenuItem(
             'view',
             children=[
-                MenuItem('l) list trackers', handler=list_trackers),
                 MenuItem('i) tracker info', handler=tracker_info),
+                MenuItem('l) list trackers', handler=list_trackers),
+                MenuItem('r) reverse sort', handler=reverse_sort),
             ]
         ),
     ]
