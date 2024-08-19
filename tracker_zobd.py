@@ -430,7 +430,7 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        self.next_first = False
+        self.next_first = True
         logger.debug(f"opened tracker manager using data from\n  {self.db_path}")
         self.load_data()
 
@@ -438,7 +438,8 @@ class TrackerManager:
         try:
             if 'settings' not in self.root:
                 self.root['settings'] = {}
-                self.root['settings']['next_days'] = 1
+                self.root['settings']['next_alert'] = 1
+                self.root['settings']['next_warn'] = 7
                 self.root['settings']['ampm'] = True
                 self.root['settings']['yearfirst'] = True
                 self.root['settings']['dayfirst'] = False
@@ -455,7 +456,8 @@ class TrackerManager:
         self.update_dates()
 
     def update_dates(self):
-        self.next_date = (datetime.now() + timedelta(days=self.settings['next_days'])).strftime("%y-%m-%d")
+        self.next_alert_date = (datetime.now() + timedelta(days=self.settings['next_alert'])).strftime("%y-%m-%d")
+        self.next_warn_date = (datetime.now() - timedelta(days=self.settings['next_alert'])).strftime("%y-%m-%d")
 
     def set_setting(self, key, value):
         if key in self.settings:
@@ -594,7 +596,7 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
             tracker.edit_history()
             self.save_data()
         else:
-            logger.debug(f"No tracker found with ID {doc_id}.")
+            logger.debug(f"No tracker found corresponding to label {label}.")
 
     def get_tracker_from_id(self, doc_id):
         return self.trackers.get(doc_id, None)
@@ -621,9 +623,10 @@ db_file = "/Users/dag/track-test/tracker.fs"
 tracker_manager = TrackerManager(db_file)
 
 tracker_style = {
-    'next-less': 'fg:lightskyblue',
-    'next-more': '',
-    'last-less': 'fg:lightskyblue',
+    'next-warn': 'fg:darkorange',
+    'next-alert': 'fg:gold',
+    'next-fine': 'fg:lightskyblue',
+    'last-less': '',
     'last-more': '',
     'no-dates': '',
     'default': '',
@@ -637,7 +640,9 @@ banner_regex = re.compile(r'^\u200C')
 class TrackerLexer(Lexer):
     def __init__(self):
         now = datetime.now()
-        self.next_date = (now + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
+        # tracker_manager.update_dates()
+        self.next_alert_date = (now + timedelta(days=tracker_manager.settings['next_alert'])).strftime("%y-%m-%d")
+        self.next_warn_date = (now - timedelta(days=tracker_manager.settings['next_warn'])).strftime("%y-%m-%d")
         self.last_date = now.strftime("%y-%m-%d")
 
     def lex_document(self, document):
@@ -655,44 +660,32 @@ class TrackerLexer(Lexer):
                 tag, next_date, last_date, tracker_name = parts[0], parts[1], parts[2], " ".join(parts[3:])
 
                 # Determine styles based on dates
-                if next_date != "~" and next_date <= self.next_date:
-                    next_style = tracker_style.get('next-less', '')
-                    last_style = tracker_style.get('default', '')
-                    name_style = next_style
-                elif next_date != "~" and next_date > self.next_date:
-                    next_style = tracker_style.get('next-more', '')
-                    last_style = tracker_style.get('default', '')
-                    name_style = next_style
-                # elif next_date == "~" and last_date != "~" and last_date <= self.last_date:
-                #     next_style = tracker_style.get('default', '')
-                #     last_style = tracker_style.get('last-less', '')
-                #     name_style = last_style
-                # elif next_date == "~" and last_date != "~" and last_date > self.last_date:
-                #     next_style = tracker_style.get('default', '')
-                #     last_style = tracker_style.get('last-more', '')
-                #     name_style = last_style
-                elif next_date == "~" and last_date == "~":
-                    next_style = tracker_style.get('no-dates', '')
-                    last_style = tracker_style.get('no-dates', '')
-                    name_style = tracker_style.get('default', '')
+                if next_date != "~" and next_date <= self.next_warn_date:
+                    next_style = tracker_style.get('next-warn', '')
+                    last_style = tracker_style.get('next-warn', '')
+                    name_style = tracker_style.get('next-warn', '')
+                elif next_date != "~" and next_date <= self.next_alert_date:
+                    next_style = tracker_style.get('next-alert', '')
+                    last_style = tracker_style.get('next-alert', '')
+                    name_style = tracker_style.get('next-alert', '')
+                elif next_date != "~" and next_date > self.next_alert_date:
+                    next_style = tracker_style.get('next-fine', '')
+                    last_style = tracker_style.get('next-fine', '')
+                    name_style = tracker_style.get('next-fine', '')
                 else:
                     next_style = tracker_style.get('default', '')
                     last_style = tracker_style.get('default', '')
-                name_style = tracker_style.get('default', '')
+                    name_style = tracker_style.get('default', '')
 
                 # Format each part with fixed width
-                tag_formatted = f"  {tag:<5}"  # 7 spaces for tag
+                tag_formatted = f"  {tag:<5}"          # 7 spaces for tag
                 next_formatted = f"{next_date:^8}   "  # 10 spaces for next date
                 last_formatted = f"{last_date:^8}   "  # 10 spaces for last date
-
                 # Add the styled parts to the tokens list
                 tokens.append((tracker_style.get('tag', ''), tag_formatted))
                 tokens.append((next_style, next_formatted))
                 tokens.append((last_style, last_formatted))
                 tokens.append((name_style, tracker_name))
-                # tokens.append((tracker_style.get('default', ''), tracker_name))
-
-
             elif banner_regex.match(line):
                 tokens.append((tracker_style.get('banner', ''), line))
             else:
@@ -813,7 +806,7 @@ tracker_lexer = TrackerLexer()
 display_area = TextArea(text="", read_only=True, search_field=search_field, lexer=tracker_lexer)
 
 tracker_manager.update_dates()               # Recalculate dates
-tracker_lexer.next_date = tracker_manager.next_date
+tracker_lexer.next_date = tracker_manager.next_warn_date
 # tracker_lexer.last_date = tracker_manager.last_date
 
 # input_area = TextArea(focusable=True, multiline=True, height=2, prompt='> ', style="class:input-area")
