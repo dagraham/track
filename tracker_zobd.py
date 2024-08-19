@@ -1062,11 +1062,21 @@ def del_example_trackers(*event):
 def add_completion(*event):
     action[0] = "complete"
     logger.debug(f"action: '{action[0]}'")
-    menu_mode[0] = False
-    select_mode[0] = True
-    dialog_visible[0] = True
-    input_visible[0] = False
-    message_control.text = f"{key_msg} add completion."
+    tracker = get_tracker_from_row()
+    if tracker:
+        logger.debug("got tracker from row, calling process_tracker")
+        menu_mode[0] = True
+        select_mode[0] = False
+        dialog_visible[0] = True
+        input_visible[0] = True
+        process_tracker(event, tracker)
+    else:
+        logger.debug("using label selection")
+        menu_mode[0] = False
+        select_mode[0] = True
+        dialog_visible[0] = True
+        input_visible[0] = False
+        message_control.text = f"{key_msg} add completion."
 
 @kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
 def handle_completion(event):
@@ -1112,16 +1122,6 @@ def rename_tracker(*event):
     dialog_visible[0] = True
     input_visible[0] = False
     message_control.text = f"{key_msg} rename tracker."
-
-# @kb.add('f4')
-# def do_check_updates(*event):
-#     display_message('Checking for updates...')
-#     # status, res = check_update()
-#     # '?', None (info unavalable)
-#     # EtmChar.UPDATE_CHAR, available_version (update to available_version is possible)
-#     # '', current_version (current_version is the latest available)
-#     # if status in ['?', '']:   # message only
-#     #     show_message('Update Information', res, 2)
 
 selected_id = None
 def select_tracker_from_label(event, key: str):
