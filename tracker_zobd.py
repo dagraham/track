@@ -699,7 +699,6 @@ class TrackerLexer(Lexer):
     def _parse_date(date_str):
         return datetime.strptime(date_str, "%y-%m-%d")
 
-freq = 12
 
 def format_statustime(obj, freq: int = 0):
     width = shutil.get_terminal_size()[0]
@@ -851,6 +850,8 @@ dialog_container = ConditionalContainer(
     content=dialog_area,
     filter=Condition(lambda: dialog_visible[0])
 )
+
+freq = 12
 
 status_control = FormattedTextControl(text=f"{format_statustime(datetime.now(), freq)}")
 status_window = Window(content=status_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.LEFT)
