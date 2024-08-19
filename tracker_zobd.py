@@ -439,7 +439,6 @@ class TrackerManager:
             if 'settings' not in self.root:
                 self.root['settings'] = {}
                 self.root['settings']['next_days'] = 1
-                # self.root['settings']['flag_after'] = 7
                 self.root['settings']['ampm'] = True
                 self.root['settings']['yearfirst'] = True
                 self.root['settings']['dayfirst'] = False
@@ -457,7 +456,6 @@ class TrackerManager:
 
     def update_dates(self):
         self.next_date = (datetime.now() + timedelta(days=self.settings['next_days'])).strftime("%y-%m-%d")
-        # self.last_date = (datetime.now() - timedelta(days=self.settings['flag_after'])).strftime("%y-%m-%d") if self.settings['flag_after'] != 0 else None
 
     def set_setting(self, key, value):
         if key in self.settings:
@@ -539,7 +537,6 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
             logger.debug(f"{tracker.doc_id}: {tracker.name}")
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
-            flag_after = parts[1] if len(parts) > 1 else 0
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
@@ -548,7 +545,7 @@ Recorded completion {dt.strftime('%Y-%m-%d %H:%M')}\n {self.trackers[doc_id].get
             self.label_to_id[(self.active_page, label)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             count += 1
-            rows.append(f"  {label}    {next:<8}  {last:<8}  {tracker_name}@ {flag_after}")
+            rows.append(f" {label}    {next:<8}  {last:<8}  {tracker_name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -641,8 +638,7 @@ class TrackerLexer(Lexer):
     def __init__(self):
         now = datetime.now()
         self.next_date = (now + timedelta(days=tracker_manager.settings['next_days'])).strftime("%y-%m-%d")
-        self.last_date = now
-        # self.last_date = (datetime.now() - timedelta(days=tracker_manager.settings['flag_after'])).strftime("%y-%m-%d")
+        self.last_date = now.strftime("%y-%m-%d")
 
     def lex_document(self, document):
         lines = document.lines
@@ -651,11 +647,7 @@ class TrackerLexer(Lexer):
             tokens = []
 
             if line and line[0] == ' ':  # does line start with a space
-                at_parts = line.split('@')
-                parts = at_parts[0].split()
-                if len(at_parts) > 1:
-                    flag_after = int(at_parts[1])
-                    self.last_date = (datetime.now() - timedelta(days=flag_after)).strftime("%y-%m-%d")
+                parts = line.split()
                 if len(parts) < 4:
                     return [(tracker_style.get('default', ''), line)]
 
@@ -671,14 +663,14 @@ class TrackerLexer(Lexer):
                     next_style = tracker_style.get('next-more', '')
                     last_style = tracker_style.get('default', '')
                     name_style = next_style
-                elif next_date == "~" and last_date != "~" and last_date <= self.last_date:
-                    next_style = tracker_style.get('default', '')
-                    last_style = tracker_style.get('last-less', '')
-                    name_style = last_style
-                elif next_date == "~" and last_date != "~" and last_date > self.last_date:
-                    next_style = tracker_style.get('default', '')
-                    last_style = tracker_style.get('last-more', '')
-                    name_style = last_style
+                # elif next_date == "~" and last_date != "~" and last_date <= self.last_date:
+                #     next_style = tracker_style.get('default', '')
+                #     last_style = tracker_style.get('last-less', '')
+                #     name_style = last_style
+                # elif next_date == "~" and last_date != "~" and last_date > self.last_date:
+                #     next_style = tracker_style.get('default', '')
+                #     last_style = tracker_style.get('last-more', '')
+                #     name_style = last_style
                 elif next_date == "~" and last_date == "~":
                     next_style = tracker_style.get('no-dates', '')
                     last_style = tracker_style.get('no-dates', '')
@@ -689,7 +681,7 @@ class TrackerLexer(Lexer):
                 name_style = tracker_style.get('default', '')
 
                 # Format each part with fixed width
-                tag_formatted = f" {tag:<5} "  # 7 spaces for tag
+                tag_formatted = f"  {tag:<5}"  # 7 spaces for tag
                 next_formatted = f"{next_date:^8}   "  # 10 spaces for next date
                 last_formatted = f"{last_date:^8}   "  # 10 spaces for last date
 
@@ -829,7 +821,7 @@ input_area = TextArea(
     focusable=True,
     multiline=True,
     prompt='> ',
-    height=D(preferred=1, max=10),  # Set preferred and max height
+    height=D(preferred=1, max=5),  # Set preferred and max height
     style="class:input-area"
 )
 
@@ -849,7 +841,7 @@ message_control = FormattedTextControl(text="")
 message_window = DynamicContainer(
     lambda: Window(
         content=message_control,
-        height=D(preferred=1, max=10),  # Adjust max height as needed
+        height=D(preferred=1, max=3),  # Adjust max height as needed
         style="class:message-window"
     )
 )
@@ -1043,19 +1035,10 @@ def new_tracker(*event):
     @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
     def handle_input(event):
         """Handle input when Enter is pressed."""
-        parts = [x.strip() for x in input_area.text.split('@')]
+        parts = [x.strip() for x in input_area.text.split()]
         tracker_name = parts[0]
-        flag_after = None
-        if len(parts) > 1:
-            try:
-                flag_after = int(parts[1])
-            except ValueError:
-                flag_after = 0
-
         if tracker_name:
-            logger.debug(f"got tracker name: {tracker_name}, flag_after: {flag_after}")
-            if flag_after and flag_after > 0:
-                tracker_name=f"{tracker_name} @{flag_after}"
+            logger.debug(f"got tracker name: {tracker_name}")
             tracker_manager.add_tracker(
                 name=tracker_name,
                 )
