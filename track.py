@@ -160,16 +160,16 @@ class TrackerManager:
         self.trackers[doc_id] = tracker
         self.save_data(self.file_path)
 
-    def record_completion(self, doc_id: int, dt: datetime):
-        # dt will be a datetime
-        ok, msg = self.trackers[doc_id].record_completion(dt)
+    def record_completion(self, doc_id: int, completion: tuple[datetime, timedelta]):
+        ok, msg = self.trackers[doc_id].record_completion(completion)
         if not ok:
             print(msg)
             return
 
         self.save_data(self.file_path)
+        dt, td = completion
         print(f"""\
-    {doc_id}: Recorded {dt.strftime('%Y-%m-%d %H:%M')} as a completion:\n    {self.trackers[doc_id].get_tracker_data()}""")
+    {doc_id}: Recorded ({dt.strftime('%Y-%m-%d %H:%M')}, {Tracker.format_td(td)}) as a completion:\n    {self.trackers[doc_id].get_tracker_data()}""")
 
     def get_tracker_data(self, doc_id: int = None):
 
