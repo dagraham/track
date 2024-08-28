@@ -1609,14 +1609,6 @@ def add_completion(*event):
             input_area.accept_handler = lambda buffer: handle_completion()
 
 
-
-        # logger.debug("using label selection")
-        # menu_mode[0] = False
-        # select_mode[0] = True
-        # dialog_visible[0] = True
-        # input_visible[0] = False
-        # message_control.text = f"{key_msg} add completion."
-
 @kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
 def handle_completion(event):
     """Handle input when Enter is pressed."""
