@@ -170,27 +170,12 @@ def deserialize_record(record):
     return convert_value(record)
 
 def backup_zodb_to_json(root, json_file):
-    # Open ZODB
-    # storage = FileStorage.FileStorage(db_file)
-    # db = DB(storage)
-    # connection = db.open()
-    # root = connection.root()
-
     # Convert the ZODB data to a JSON serializable format
     json_data = {k: serialize_record(v) for k, v in root.items()}
 
     # Write the data to a JSON file
     with open(json_file, 'w') as json_file:
         json.dump(json_data, json_file, indent=2)
-
-    # Close ZODB
-    # connection.close()
-    # db.close()
-    # storage.close()
-    # return True
-
-# Example usage
-# backup_zodb_to_json(db_file, json_file)
 
 def restore_json_to_zodb(json_file_path, zodb_path):
     # Open ZODB
@@ -526,6 +511,8 @@ class Tracker(Persistent):
                 else:
                     result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
                 result['next_expected_completion'] = result['last_completion'][0] + result['average_interval']
+                result['early'] = result['next_expected_completion'] - timedelta(days=1)
+                result['late'] = result['next_expected_completion'] + timedelta(days=1)
             if result['num_intervals'] >= 2:
                 total = timedelta(minutes=0)
                 for interval in intervals:
@@ -534,10 +521,12 @@ class Tracker(Persistent):
                     else:
                         total += interval - result['average_interval']
                 result['spread'] = total / result['num_intervals']
-                result['early'] = result['next_expected_completion'] - result['spread']
-                result['late'] = result['next_expected_completion'] + result['spread']
+                result['early'] = result['next_expected_completion'] - tracker_manager.settings['num_spread'] * result['spread']
+                result['late'] = result['next_expected_completion'] + tracker_manager.settings['num_spread'] * result['spread']
+        self._info = result
         self._p_changed = True
         logger.debug(f"returning {result = }")
+
         return result
 
     # XXX: Just for reference
@@ -555,6 +544,8 @@ class Tracker(Persistent):
 
     def record_completion(self, completion: tuple[datetime, timedelta]):
         ok, msg = True, ""
+        if not isinstance(completion, tuple) or len(completion) < 2:
+            completion = (completion, timedelta(0))
         self.history.append(completion)
         self.history.sort(key=lambda x: x[0])
         if len(self.history) > Tracker.max_history:
@@ -742,6 +733,7 @@ class TrackerManager:
         if not ok:
             display_message(msg)
             return
+        # self.trackers[doc_id].compute_info()
         dt, td = comp
         display_message(f"""\
 Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.trackers[doc_id].get_tracker_info()}""", 'info')
@@ -779,6 +771,8 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
 
     def list_trackers(self):
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%y-%m-%d")
+        width = shutil.get_terminal_size()[0]
+        name_width = width - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
         banner = f"{ZWNJ} tag     next       last     tracker name\n"
@@ -791,11 +785,13 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             # logger.debug(f"{tracker.doc_id}: {tracker.name}")
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
+            if len(tracker_name) > name_width:
+                tracker_name = tracker_name[:name_width - 3] + "..."
             spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
             num_spread = self.get_setting('num_spread')
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
-            alert = tracker._info.get('alert', None) if hasattr(tracker, '_info') else None
-            warn = tracker._info.get('warn', None) if hasattr(tracker, '_info') else None
+            early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
+            late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
             # if num_spread and spread:
             #     alert = (next_dt - num_spread * spread).strftime("%y-%m-%d")
             #     warn = (next_dt + num_spread * spread).strftime("%y-%m-%d")
@@ -806,7 +802,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
             last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
             tag = TrackerManager.labels[count]
-            self.id_to_times[tracker.doc_id] = (alert, warn)
+            self.id_to_times[tracker.doc_id] = (early.strftime("%y-%m-%d") if early else '', late.strftime("%y-%m-%d") if late else '')
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             self.tag_to_row[(self.active_page, tag)] = count+1
@@ -935,6 +931,38 @@ class InfoLexer(Lexer):
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super(InfoLexer, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
+
+    def __init__(self):
+        if not hasattr(self, '_initialized'):
+            self._initialized = True
+            now = datetime.now()
+        now = datetime.now()
+
+    def lex_document(self, document):
+        # Implement the logic for tokenizing the document here.
+        # You should yield tuples of (start_pos, Token) pairs for each token in the document.
+
+        # Example: Basic tokenization that highlights keywords in a simple way.
+        logger.debug("lex_document called")
+        active_page = tracker_manager.active_page
+        lines = document.lines
+        now = datetime.now().strftime("%y-%m-%d")
+        def get_line_tokens(line_number):
+            line = lines[line_number]
+            tokens = []
+            if line:
+                tokens.append((tracker_style.get('default', ''), line))
+            return tokens
+        return get_line_tokens
+
+
+class HelpLexer(Lexer):
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(HelpLexer, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
     def __init__(self):
@@ -1149,6 +1177,7 @@ BEF = '\u200B'
 
 tracker_lexer = TrackerLexer()
 info_lexer = InfoLexer()
+help_lexer = HelpLexer()
 default_lexer = DefaultLexer()
 
 display_area = TextArea(text="", read_only=True, search_field=search_field, lexer=tracker_lexer)
@@ -1158,6 +1187,8 @@ def set_lexer(document_type: str):
         display_area.lexer = tracker_lexer
     elif document_type == 'info':
         display_area.lexer = info_lexer
+    elif document_type == 'help':
+        display_area.lexer = help_lexer
     else:
         display_area.lexer = default_lexer
 
@@ -1215,7 +1246,7 @@ page_window = Window(content=page_control, height=1, style="class:status-window"
 
 right_control = FormattedTextControl(text="")
 right_window = Window(content=right_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.RIGHT)
-right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
+# right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
 
 
 def set_pages(txt: str):
@@ -1360,7 +1391,7 @@ def do_check_updates(*event):
 @kb.add('f4')
 def do_help(*event):
     help_text = read_readme()
-    display_message(wrap(help_text, 0))
+    display_message(wrap(help_text, 0), 'help')
 
 @kb.add('c-q')
 def exit_app(*event):
@@ -1411,12 +1442,12 @@ def first_page(*event):
     tracker_manager.first_page()
     list_trackers()
 
-@kb.add('r', filter=Condition(lambda: menu_mode[0]))
-def reverse_sort(*event):
-    tracker_manager.next_first = not tracker_manager.next_first
-    right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
-    # right_control.text = "next first " if tracker_manager.next_first else "next last "
-    list_trackers()
+# @kb.add('r', filter=Condition(lambda: menu_mode[0]))
+# def reverse_sort(*event):
+#     tracker_manager.next_first = not tracker_manager.next_first
+#     right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
+#     # right_control.text = "next first " if tracker_manager.next_first else "next last "
+#     list_trackers()
 
 @kb.add('t', filter=Condition(lambda: menu_mode[0]))
 def select_tag(*event):
@@ -1527,15 +1558,29 @@ def new_tracker(*event):
 
 @kb.add('c-e')
 def add_example_trackers(*event):
-    for i in range(100):
-        tracker_manager.add_tracker(f"example {i+1}")
+    import lorem
+    from lorem.text import TextLorem
+    lm = TextLorem(srange=(1,3))
+    import random
+    today = datetime.now().replace(microsecond=0,second=0,minute=0,hour=0)
+    for i in range(78):
+        tracker_manager.add_tracker(f"# {lm.sentence()[:-1]}") # remove period at end and record for doc_id i+1
+        num_completions = random.choice(range(0,9,2))
+        days = random.choice(range(1,12))
+        offset = timedelta(minutes=-720*days)
+        for j in range(num_completions):
+            minutes = random.choice(range(-144,144, 12))*days
+            offset += timedelta(minutes=days*1440+minutes)
+            comp = today - offset
+            tracker_manager.trackers[i+1].record_completion(comp)
+        tracker_manager.trackers[i+1].compute_info()
     list_trackers()
 
 @kb.add('c-r')
 def del_example_trackers(*event):
     remove = []
     for id, tracker in tracker_manager.trackers.items():
-        if tracker.name.startswith('example'):
+        if tracker.name.startswith('#'):
             remove.append(id)
     for id in remove:
         tracker_manager.delete_tracker(id)
@@ -1624,6 +1669,7 @@ def handle_completion(event):
         ok, completion = Tracker.parse_completion(completion_str)
         logger.debug(f"recording completion_dt: '{completion}' for {selected_id}")
         tracker_manager.record_completion(selected_id, completion)
+
         close_dialog()
     else:
         display_area.text = "No completion datetime provided."
@@ -1817,7 +1863,7 @@ root_container = MenuContainer(
             children=[
                 MenuItem('i) tracker info', handler=tracker_info),
                 MenuItem('l) list trackers', handler=list_trackers),
-                MenuItem('r) reverse sort', handler=reverse_sort),
+                # MenuItem('r) reverse sort', handler=reverse_sort),
                 MenuItem('t) select tag', handler=select_tag),
             ]
         ),
