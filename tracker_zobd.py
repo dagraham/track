@@ -673,6 +673,12 @@ class TrackerManager:
             logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
 
+    def list_settings(self):
+        output = ["Tracker settings:"]
+        for k, v in self.settings.items():
+            output.append(f"   {k:<10} = {v}")
+        return '\n'.join(output)
+
     def maybe_backup(self):
         hsh = {}
         for k, v in self.trackers.items():
@@ -688,18 +694,12 @@ class TrackerManager:
         json_data = json.dumps(hsh, indent=2)
         json_file = os.path.join(os.getcwd(), "tracker.json")
         # Write the data to a JSON file
-        # Assuming 'data' is the dictionary you want to dump to a JSON file
         with open(json_file, 'w') as json_file:
             json.dump(hsh, json_file, indent=3, separators=(',', ': '), sort_keys=False)
 
-        # with open(json_file, 'w') as json_file:
-        #     json.dump(json_data, json_file, indent=4)
-        # logger.debug(f"{self.root['trackers'].items() = }")
-        # json_data = {k: serialize_record(v) for k, v in self.root['trackers'].items()}
-        # json_file = os.path.join(os.getcwd(), "tracker.json")
-        # # Write the data to a JSON file
-        # with open(json_file, 'w') as json_file:
-        #     json.dump(json_data, json_file, indent=2)
+    def refresh_info(self):
+        for k, v in self.trackers.items():
+            v.compute_info()
 
     def set_setting(self, key, value):
 
@@ -1409,14 +1409,26 @@ def display_message(message: str, document_type: str = 'list'):
 def list_trackers(*event):
     """List trackers."""
     action[0] = "list"
-    menu_mode[0] = True
-    select_mode[0] = False
-    dialog_visible[0] = False
-    input_visible[0] = False
+    set_key_profile('menu')
     display_message(tracker_manager.list_trackers(), 'list')
     # message_control.text = "Adding a new tracker..."
     app.layout.focus(display_area)
     app.invalidate()
+
+@kb.add('s', filter=Condition(lambda: menu_mode[0]))
+def list_settings(*event):
+    """List settings."""
+    action[0] = "list"
+    set_key_profile('menu')
+    display_message(tracker_manager.list_settings(), 'info')
+    # message_control.text = "Adding a new tracker..."
+    app.layout.focus(display_area)
+    app.invalidate()
+
+@kb.add('r', filter=Condition(lambda: menu_mode[0]))
+def refresh_info(*event):
+    tracker_manager.refresh_info()
+    list_trackers()
 
 @kb.add('t', filter=Condition(lambda: menu_mode[0]))
 def jump_to_tag(*event):
@@ -1813,7 +1825,7 @@ root_container = MenuContainer(
             children=[
                 MenuItem('i) tracker info', handler=tracker_info),
                 MenuItem('l) list trackers', handler=list_trackers),
-                # MenuItem('r) reverse sort', handler=reverse_sort),
+                MenuItem('r) refresh info', handler=refresh_info),
                 MenuItem('t) select tag', handler=select_tag),
             ]
         ),
