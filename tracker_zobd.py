@@ -1777,56 +1777,6 @@ def process_tracker(event, tracker: Tracker = None):
     else:
         list_trackers()
 
-# Bind all lowercase letters to select_tracker
-# keys = list(string.ascii_lowercase)
-# keys.append('escape')
-# for key in keys:
-#     kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: select_tracker_from_label(event, key))
-
-# Layout
-
-# @kb.add('y', filter=Condition(lambda: input_visible[0]))
-# def yes(event):
-#     action[0] = True
-#     input_visible[0] = False
-#     dialog_visible[0] = False
-
-# @kb.add('n', filter=Condition(lambda: input_visible[0]))
-# def no(event):
-#     action[0] = False
-#     input_visible[0] = False
-#     dialog_visible[0] = False
-
-# Method to get confirmation
-# def get_confirmation(message: str) -> bool:
-#     # Display the message
-#     message_control.text = message
-
-#     # Show the dialog and input area
-#     dialog_visible[0] = True
-#     input_visible[0] = True
-
-#     # Create an application instance
-#     app = Application(
-#         layout=layout,
-#         key_bindings=kb,
-#         full_screen=True,
-#     )
-
-#     # Run the application (this will block until the app exits)
-#     app.run()
-
-#     # Return the action taken by the user (True for 'y', False for 'n')
-#     return action[0]
-
-# def confirm_command(message: str)-> bool:
-#     message_control.text = message
-#     # dialog_visible[0] = True
-#     # input_visible[0] = True
-#     app.layout.focus(input_area)
-#     input_area.accept_handler = lambda buffer: handle_confirmation()
-
-
 body = HSplit([
     # menu_container,
     display_area,
