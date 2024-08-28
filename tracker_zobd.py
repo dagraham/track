@@ -1334,7 +1334,7 @@ def set_key_profile(profile: str):
 
 
 
-key_msg = "press the key corresponding to the tag of the tracker"
+tag_msg = "Press the key corresponding to the tag of the tracker"
 labels = "abcdefghijklmnopqrstuvwxyz"
 
 tag_keys = list(string.ascii_lowercase)
@@ -1456,7 +1456,7 @@ def select_tag(*event):
     """
     global done_keys, selected_id
     done_keys = tag_keys
-    message_control.text = key_msg
+    message_control.text = wrap(f" {tag_msg} you would like to select", 0)
     set_key_profile('select')
 
     for key in tag_keys:
@@ -1503,7 +1503,7 @@ def tracker_info(*event):
         return
         # message_control.text = key_msg
     done_keys = tag_keys
-    message_control.text = key_msg
+    message_control.text = wrap(f" {tag_msg} you would like to examine", 0)
     set_key_profile('select')
 
     for key in tag_keys:
@@ -1596,24 +1596,24 @@ def add_completion(*event):
         selected_id = tracker.doc_id
         logger.debug("got tracker from row, calling process_tracker")
         set_key_profile('input')
-        message_control.text = f"Enter the new completion datetime for {tracker.name} (doc_id: {selected_id})"
+        message_control.text = wrap(f" Enter the new completion datetime for {tracker.name} (doc_id: {selected_id})", 0)
         app.layout.focus(input_area)
         input_area.accept_handler = lambda buffer: handle_completion()
         return
 
     done_keys = tag_keys
-    message_control.text = key_msg
+    message_control.text = wrap(f" {tag_msg} you would like to complete", 0)
     set_key_profile('select')
 
     for key in tag_keys:
         kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
 
-    def handle_key_press(event, key):
+    def handle_key_press(event, key_pressed):
         global selected_id
-        key_pressed = event.key_sequence[0].key
-        logger.debug(f"{tracker_manager.tag_to_row = }")
+        logger.debug(f"{key_pressed = }")
         if key_pressed in done_keys:
             if key_pressed == 'escape':
+                set_key_profile('menu')
                 return
             tag = (tracker_manager.active_page, key_pressed)
             selected_id = tracker_manager.tag_to_id.get(tag)
@@ -1640,7 +1640,7 @@ def delete_tracker(*event):
         return
 
     done_keys = tag_keys
-    message_control.text = key_msg
+    message_control.text = wrap(f" {tag_msg} you would like to delete", 0)
     set_key_profile('select')
 
     for key in tag_keys:
@@ -1696,7 +1696,7 @@ def edit_history(*event):
     select_mode[0] = True
     dialog_visible[0] = True
     input_visible[0] = False
-    message_control.text = f"{key_msg} edit."
+    message_control.text = wrap(f" {tag_msg} you would like to edit", 0)
 
 def rename_tracker(*event):
     action[0] = "rename"
@@ -1704,7 +1704,7 @@ def rename_tracker(*event):
     select_mode[0] = True
     dialog_visible[0] = True
     input_visible[0] = False
-    message_control.text = f"{key_msg} rename tracker."
+    message_control.text = wrap(f" {tag_msg} you would like to rename", 0)
 
 selected_id = None
 
