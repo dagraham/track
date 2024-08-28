@@ -1309,52 +1309,25 @@ labels = "abcdefghijklmnopqrstuvwxyz"
 tag_keys = list(string.ascii_lowercase)
 tag_keys.append('escape')
 
-def get_key_press(event):
-    key_pressed = event.key_sequence[0].key
-    logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-    return key_pressed
+bool_keys = ['y', 'n', 'escape']
 
-def handle_key(event, key):
-    result['key'] = key
-    # Remove the prompt from the layout
-    # root_container.children.remove(prompt_window)
-    # event.app.layout.focus(root_container.children[0])  # Restore focus
-    event.app.exit(result=result)
+# def get_key_press(event):
+#     key_pressed = event.key_sequence[0].key
+#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+#     return key_pressed
+
+# def handle_key(event, key):
+#     result['key'] = key
+#     # Remove the prompt from the layout
+#     # root_container.children.remove(prompt_window)
+#     # event.app.layout.focus(root_container.children[0])  # Restore focus
+#     event.app.exit(result=result)
 
 # from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application.current import get_app
 
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application.current import get_app
-
-def get_yes_no(message):
-    result['key'] = 'n'
-
-    @kb.add('escape')
-    def handle_escape(event):
-        result['key'] = 'escape'
-
-    # Temporarily set the key bindings
-    app = get_app()
-    previous_key_bindings = app.key_bindings
-    app.key_bindings = kb
-
-    # Run the event loop and wait for the key press
-    app.run()  # This should now be used in a synchronous manner within the loop
-
-    # Restore the original key bindings
-    app.key_bindings = previous_key_bindings
-
-    # Return the key pressed
-    return result['key']
-
-
-# @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
-# def get_bool(event):
-#     key_pressed = event.key_sequence[0].key
-#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-#     return key_pressed == 'y'
-
 
 # @kb.add(*list(labels), filter=Condition(lambda: select_mode[0]))
 def get_selection(event):
@@ -1365,8 +1338,6 @@ def get_selection(event):
         selected_id = tracker_manager.get_id_from_label(key_pressed)
         set_key_profile('menu')
         list_trackers()
-
-
 
 @kb.add('f1')
 def menu(event=None):
@@ -1608,11 +1579,45 @@ def add_completion(*event):
             app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: handle_completion()
 
+@kb.add('d', filter=Condition(lambda: menu_mode[0]))
+def delete_tracker(*event):
+    global done_keys, selected_id
+    tracker = get_tracker_from_row()
+    logger.debug(f"in delete_tracker: {tracker = }")
+    action[0] = "delete"
+    if tracker:
+        selected_id = tracker.doc_id
+        logger.debug("got tracker from row")
+        set_key_profile('input')
+        message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {selected_id}) (y/n)?"
+        # app.layout.focus(input_area)
+        # input_area.accept_handler = lambda buffer: handle_completion()
+        return
+
+    done_keys = tag_keys
+    message_control.text = key_msg
+    set_key_profile('select')
+
+    for key in tag_keys:
+        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
+
+    def handle_key_press(event, key):
+        global selected_id
+        key_pressed = event.key_sequence[0].key
+        logger.debug(f"{key_pressed = }")
+        if key_pressed in done_keys:
+            if key_pressed == 'escape':
+                return
+            tag = (tracker_manager.active_page, key_pressed)
+            selected_id = tracker_manager.tag_to_id.get(tag)
+            tracker = tracker_manager.get_tracker_from_id(selected_id)
+            logger.debug(f"got id {selected_id} from tag {tag}")
+            set_key_profile('bool')
+            message_control.text = f"Are you sure you want to delete {tracker.name} ({selected_id}) (y/n)?"
 
 @kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
 def handle_completion(event):
-    """Handle input when Enter is pressed."""
-    menu_mode[0] = False
+    """Handle input when ^s is pressed."""
     completion_str = input_area.text.strip()
     logger.debug(f"got completion_str: '{completion_str}' for {selected_id}")
     if completion_str:
@@ -1622,50 +1627,20 @@ def handle_completion(event):
         close_dialog()
     else:
         display_area.text = "No completion datetime provided."
-    # app.layout.focus(display_area)
+    set_key_profile('menu')
+    app.layout.focus(display_area)
 
-
-@kb.add('d', filter=Condition(lambda: menu_mode[0]))
-def delete_tracker(*event):
-    """Delete a tracker."""
-    global selected_id
-    action[0] = "delete"
-    logger.debug(f"action: '{action[0]}'")
-    tracker = get_tracker_from_row()
-    if not tracker:
-        logger.debug("using label selection")
-        set_key_profile('select')
-        tracker = tracker_manager.get_tracker_from_tag(key)
-    if tracker:
-        selected_id = tracker.doc_id
-        logger.debug("got tracker from row, calling process_tracker")
-        # process_tracker(event, tracker)
-    else:
-        pass
-        # message_control.text = f"{key_msg} delete."
-    result = get_yes_no("Are you sure you want to delete this tracker?  yN")
-    if result['key'] == 'y':
+for key in bool_keys:
+    kb.add(key, filter=Condition(lambda: action[0]=='delete'), eager=True)(lambda event, key=key: handle_delete(event, key))
+def handle_delete(event, key):
+    """Handle input when y, n, or escape is pressed."""
+    logger.debug(f"got key {key} for delete {selected_id}")
+    if key == 'y':
         tracker_manager.delete_tracker(selected_id)
-        message_control.text = f"Deleted tracker {selected_id}"
-    else:
-        message_control.text = f"Cancelled deletion"
+        logger.debug(f"deleted tracker: {selected_id}")
+    set_key_profile('menu')
     list_trackers()
-    # set_key_profile('bool')
-    # logger.debug(f"bool_mode: {bool_mode[0]}")
-    # input_area.text = ""
-    # message_control.text = "Are you sure you want to delete this tracker?  yN"
-
-    # @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
-    # def handle_key(event):
-    #     key_pressed = event.key_sequence[0].key
-    #     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-    #     if key_pressed == 'y':
-    #         tracker_manager.delete_tracker(selected_id)
-    #         message_control.text = f"Deleted tracker {selected_id}"
-    #     else:
-    #         message_control.text = f"Cancelled deletion"
-    #     set_key_profile('menu')
-    #     list_trackers()
+    app.layout.focus(display_area)
 
 @kb.add('e', filter=Condition(lambda: menu_mode[0]))
 def edit_history(*event):
@@ -1703,7 +1678,6 @@ def select_tracker_from_label(event, key: str):
         display_area.buffer.cursor_position = (
             display_area.buffer.document.translate_row_col_to_index(row, 0)
         )
-
 
 confirmation = False
 confirm_command = None
