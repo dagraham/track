@@ -31,6 +31,8 @@ from prompt_toolkit.key_binding.bindings.focus import (
     focus_next,
     focus_previous,
 )
+from prompt_toolkit.application.current import get_app
+
 from dateutil.parser import parse, parserinfo
 import string
 import shutil
@@ -43,6 +45,7 @@ from persistent import Persistent
 import transaction
 import os
 import time
+import json
 
 import textwrap
 import re
@@ -83,13 +86,13 @@ def setup_console_logging():
         except ValueError:
             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
 
-    # Configure logging
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    logging.info(f"\n### Logging initialized at level {log_level} ###")
+        # Configure logging
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        logging.info(f"\n### Logging initialized at level {log_level} ###")
 
 # File logging
 def setup_file_logging():
@@ -117,6 +120,105 @@ setup_file_logging()
 logger = logging.getLogger()
 
 logger.debug(f"version: {version.version}")
+
+### Begin Backup and Restore functions
+def serialize_record(record):
+    def convert_value(value):
+        if isinstance(value, datetime):
+            return value.strftime("%y%m%dT%H%M")  # Convert datetime to ISO format string
+        elif isinstance(value, timedelta):
+            return str(int(value.total_seconds()/60))  # Convert timedelta to minutes
+        elif isinstance(value, tuple) and len(value) == 2:
+            if isinstance(value[0], datetime) and isinstance(value[1], timedelta):
+                return (value[0].strftime("%y%m%dT%H%M"), str(int(value[1].total_seconds()/60)))
+            else:
+                return tuple(convert_value(v) for v in value)
+        elif isinstance(value, list):
+            return [convert_value(v) for v in value]  # Process each element in the list
+        elif isinstance(value, dict):
+            return {k: convert_value(v) for k, v in value.items()}
+        else:
+            return value
+
+    return convert_value(record)
+
+def deserialize_record(record):
+    def convert_value(value):
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+            try:
+                return timedelta(seconds=float(value))
+            except ValueError:
+                pass
+        if isinstance(value, tuple) and len(value) == 2:
+            try:
+                dt = datetime.fromisoformat(value[0])
+                td = timedelta(seconds=float(value[1]))
+                return (dt, td)
+            except ValueError:
+                return tuple(convert_value(v) for v in value)
+        elif isinstance(value, list):
+            return [convert_value(v) for v in value]  # Process each element in the list
+        elif isinstance(value, dict):
+            return {k: convert_value(v) for k, v in value.items()}
+        else:
+            return value
+
+    return convert_value(record)
+
+def backup_zodb_to_json(root, json_file):
+    # Open ZODB
+    # storage = FileStorage.FileStorage(db_file)
+    # db = DB(storage)
+    # connection = db.open()
+    # root = connection.root()
+
+    # Convert the ZODB data to a JSON serializable format
+    json_data = {k: serialize_record(v) for k, v in root.items()}
+
+    # Write the data to a JSON file
+    with open(json_file, 'w') as json_file:
+        json.dump(json_data, json_file, indent=2)
+
+    # Close ZODB
+    # connection.close()
+    # db.close()
+    # storage.close()
+    # return True
+
+# Example usage
+# backup_zodb_to_json(db_file, json_file)
+
+def restore_json_to_zodb(json_file_path, zodb_path):
+    # Open ZODB
+    storage = FileStorage.FileStorage(zodb_path)
+    db = DB(storage)
+    connection = db.open()
+    root = connection.root()
+
+    # Load the JSON data
+    with open(json_file_path, 'r') as json_file:
+        json_data = json.load(json_file)
+
+    # Convert the JSON data back to the original format and restore to ZODB
+    for k, v in json_data.items():
+        root[k] = deserialize_record(v)
+
+    # Commit the transaction to save changes
+    transaction.commit()
+
+    # Close ZODB
+    connection.close()
+    db.close()
+    storage.close()
+
+# Example usage
+# restore_json_to_zodb('/path/to/backup.json', '/path/to/your/Data.fs')
+
+### End Backup and Restore functions
 
 def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 2):
     # Preprocess to replace spaces within specific "@\S" patterns with PLACEHOLDER
@@ -549,6 +651,7 @@ class TrackerManager:
         self.trackers = {}
         self.tag_to_id = {}
         self.row_to_id = {}
+        self.tag_to_row = {}
         self.id_to_times = {}
         self.active_page = 0
         self.storage = FileStorage.FileStorage(self.db_path)
@@ -556,8 +659,9 @@ class TrackerManager:
         self.connection = self.db.open()
         self.root = self.connection.root()
         self.next_first = True
-        logger.debug(f"opened tracker manager using data from\n  {self.db_path}")
+        logger.debug(f"using data from\n  {self.db_path}")
         self.load_data()
+        self.maybe_backup()
 
     def load_data(self):
         try:
@@ -577,18 +681,41 @@ class TrackerManager:
         except Exception as e:
             logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
-        # self.update_dates()
 
-    # def update_dates(self):
-    #     self.next_alert_date = (datetime.now() + timedelta(days=self.settings['next_alert'])).strftime("%y-%m-%d")
-    #     self.next_warn_date = (datetime.now() - timedelta(days=self.settings['next_alert'])).strftime("%y-%m-%d")
+    def maybe_backup(self):
+        hsh = {}
+        for k, v in self.trackers.items():
+            f = {}
+            f['name'] = v.name
+            f['created'] = serialize_record(v.created)
+            f['modified'] = serialize_record(v.modifed)
+            # _['_info'] = serialize_record(v._info) # can be computed from the other fields
+            f['history'] = serialize_record(v.history)
+
+            hsh[k] = f
+        logger.debug(f"{hsh = }")
+        json_data = json.dumps(hsh, indent=2)
+        json_file = os.path.join(os.getcwd(), "tracker.json")
+        # Write the data to a JSON file
+        # Assuming 'data' is the dictionary you want to dump to a JSON file
+        with open(json_file, 'w') as json_file:
+            json.dump(hsh, json_file, indent=3, separators=(',', ': '), sort_keys=False)
+
+        # with open(json_file, 'w') as json_file:
+        #     json.dump(json_data, json_file, indent=4)
+        # logger.debug(f"{self.root['trackers'].items() = }")
+        # json_data = {k: serialize_record(v) for k, v in self.root['trackers'].items()}
+        # json_file = os.path.join(os.getcwd(), "tracker.json")
+        # # Write the data to a JSON file
+        # with open(json_file, 'w') as json_file:
+        #     json.dump(json_data, json_file, indent=2)
 
     def set_setting(self, key, value):
+
         if key in self.settings:
             self.settings[key] = value
             self.zodb_root[0] = self.settings  # Update the ZODB storage
             transaction.commit()
-            # self.update_dates()  # Refresh dates if needed
         else:
             print(f"Setting '{key}' not found.")
 
@@ -667,11 +794,13 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
             num_spread = self.get_setting('num_spread')
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
-            if num_spread and spread:
-                alert = (next_dt - num_spread * spread).strftime("%y-%m-%d")
-                warn = (next_dt + num_spread * spread).strftime("%y-%m-%d")
-            else:
-                alert = warn = None
+            alert = tracker._info.get('alert', None) if hasattr(tracker, '_info') else None
+            warn = tracker._info.get('warn', None) if hasattr(tracker, '_info') else None
+            # if num_spread and spread:
+            #     alert = (next_dt - num_spread * spread).strftime("%y-%m-%d")
+            #     warn = (next_dt + num_spread * spread).strftime("%y-%m-%d")
+            # else:
+            #     alert = warn = None
             last_completion = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
             last_dt = last_completion[0] if last_completion else None
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
@@ -680,6 +809,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             self.id_to_times[tracker.doc_id] = (alert, warn)
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
+            self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
             rows.append(f" {tag}    {next:<8}  {last:<8}  {tracker_name}")
         return banner +"\n".join(rows)
@@ -755,6 +885,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             self.connection.close()
 
 db_file = "/Users/dag/track-test/tracker.fs"
+json_file = "/Users/dag/track-test/tracker.json"
 tracker_manager = TrackerManager(db_file)
 
 tracker_style = {
@@ -843,14 +974,7 @@ class TrackerLexer(Lexer):
         if not hasattr(self, '_initialized'):
             self._initialized = True
             now = datetime.now()
-            # self.next_alert_date = tracker_manager.settings['next_alert'].strftime("%y-%m-%d")
-            # self.next_warn_date = tracker_manager.settings['next_warn'].strftime("%y-%m-%d")
-            # self.last_date = now.strftime("%y-%m-%d")
         now = datetime.now()
-        # tracker_manager.update_dates()
-        # self.next_alert_date = tracker_manager.settings['next_alert'].strftime("%y-%m-%d")
-        # self.next_warn_date = tracker_manager.settings['next_warn'].strftime("%y-%m-%d")
-        # self.last_date = now.strftime("%y-%m-%d")
 
     def lex_document(self, document):
         # logger.debug("lex_document called")
@@ -949,7 +1073,7 @@ style = Style.from_dict({
     'menu-bar': f'bg:#396060 {NAMED_COLORS["White"]}',
     'display-area': f'bg:#1d3030 {NAMED_COLORS["White"]}',
     'input-area': f'bg:#1d3030 {NAMED_COLORS["Gold"]}',
-    'message-window': f'bg:#396060 {NAMED_COLORS["White"]}',
+    'message-window': f'bg:#1d3030 {NAMED_COLORS["LimeGreen"]}',
     'status-window': f'bg:#396060 {NAMED_COLORS["White"]}',
 })
 
@@ -968,7 +1092,6 @@ def check_alarms():
         update_status(message)
         newday = ct.strftime("%y-%m-%d")
         if newday != today:
-            tracker_manager.update_dates()
             today = newday
 
 def update_status(new_message):
@@ -994,10 +1117,14 @@ def center_text(text, width: int = shutil.get_terminal_size()[0] - 2):
 # Menu and Mode Control
 menu_mode = [True]
 select_mode = [False]
+bool_mode = [False]
+integer_mode = [False]
+input_mode = [False]
 dialog_visible = [False]
 input_visible = [False]
 action = [None]
-bool_mode = [False]
+
+selected_id = None
 
 # Tracker mapping example
 # UI Components
@@ -1035,10 +1162,6 @@ def set_lexer(document_type: str):
         display_area.lexer = default_lexer
 
 
-# tracker_manager.update_dates()               # Recalculate dates
-# tracker_lexer.next_date = tracker_manager.next_warn_date
-# tracker_lexer.last_date = tracker_manager.last_date
-
 # input_area = TextArea(focusable=True, multiline=True, height=2, prompt='> ', style="class:input-area")
 input_area = TextArea(
     focusable=True,
@@ -1064,7 +1187,7 @@ message_control = FormattedTextControl(text="")
 message_window = DynamicContainer(
     lambda: Window(
         content=message_control,
-        height=D(preferred=1, max=8),  # Adjust max height as needed
+        height=D(preferred=1, max=3),  # Adjust max height as needed
         style="class:message-window"
     )
 )
@@ -1136,7 +1259,114 @@ def read_readme():
 
 kb = KeyBindings()
 
-key_msg = "enter the tag for the tracker row."
+def set_key_profile(profile: str):
+    if profile == 'menu':
+        # for selecting menu items with a key press
+        menu_mode[0] = True
+        select_mode[0] = False
+        bool_mode[0] = False
+        integer_mode[0] = False
+        dialog_visible[0] = False
+        input_visible[0] = False
+    elif profile == 'select':
+        # for selecting rows by a lower case letter key press
+        menu_mode[0] = False
+        select_mode[0] = True
+        bool_mode[0] = False
+        integer_mode[0] = False
+        dialog_visible[0] = True
+        input_visible[0] = False
+    elif profile == 'bool':
+        # for selecting y/n with a key press
+        menu_mode[0] = False
+        select_mode[0] = False
+        bool_mode[0] = True
+        integer_mode[0] = False
+        dialog_visible[0] = True
+        input_visible[0] = False
+    elif profile == 'integer':
+        # for selecting an single digit integer with a key press
+        menu_mode[0] = False
+        select_mode[0] = False
+        bool_mode[0] = False
+        integer_mode[0] = True
+        dialog_visible[0] = True
+        input_visible[0] = False
+    elif profile == 'input':
+        # for entering text in the input area
+        menu_mode[0] = False
+        select_mode[0] = False
+        bool_mode[0] = False
+        integer_mode[0] = False
+        dialog_visible[0] = True
+        input_visible[0] = True
+
+
+
+key_msg = "press the key corresponding to the tag of the tracker"
+labels = "abcdefghijklmnopqrstuvwxyz"
+
+tag_keys = list(string.ascii_lowercase)
+tag_keys.append('escape')
+
+def get_key_press(event):
+    key_pressed = event.key_sequence[0].key
+    logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+    return key_pressed
+
+def handle_key(event, key):
+    result['key'] = key
+    # Remove the prompt from the layout
+    # root_container.children.remove(prompt_window)
+    # event.app.layout.focus(root_container.children[0])  # Restore focus
+    event.app.exit(result=result)
+
+# from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.application.current import get_app
+
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.application.current import get_app
+
+def get_yes_no(message):
+    result['key'] = 'n'
+
+    @kb.add('escape')
+    def handle_escape(event):
+        result['key'] = 'escape'
+
+    # Temporarily set the key bindings
+    app = get_app()
+    previous_key_bindings = app.key_bindings
+    app.key_bindings = kb
+
+    # Run the event loop and wait for the key press
+    app.run()  # This should now be used in a synchronous manner within the loop
+
+    # Restore the original key bindings
+    app.key_bindings = previous_key_bindings
+
+    # Return the key pressed
+    return result['key']
+
+
+# @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
+# def get_bool(event):
+#     key_pressed = event.key_sequence[0].key
+#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+#     return key_pressed == 'y'
+
+
+# @kb.add(*list(labels), filter=Condition(lambda: select_mode[0]))
+def get_selection(event):
+    global selected_id
+    key_pressed = event.key_sequence[0].key
+    logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+    if key_pressed in labels:
+        selected_id = tracker_manager.get_id_from_label(key_pressed)
+        set_key_profile('menu')
+        list_trackers()
+
+
 
 @kb.add('f1')
 def menu(event=None):
@@ -1193,6 +1423,7 @@ def jump_to_tag(*event):
 
 @kb.add('right', filter=Condition(lambda: menu_mode[0]))
 def next_page(*event):
+
     logger.debug("next page")
     tracker_manager.next_page()
     list_trackers()
@@ -1203,11 +1434,11 @@ def previous_page(*event):
     tracker_manager.previous_page()
     list_trackers()
 
-# @kb.add('space', filter=Condition(lambda: menu_mode[0]))
-# def first_page(*event):
-#     logger.debug("first page")
-#     tracker_manager.first_page()
-#     list_trackers()
+@kb.add('space', filter=Condition(lambda: menu_mode[0]))
+def first_page(*event):
+    logger.debug("first page")
+    tracker_manager.first_page()
+    list_trackers()
 
 @kb.add('r', filter=Condition(lambda: menu_mode[0]))
 def reverse_sort(*event):
@@ -1215,6 +1446,36 @@ def reverse_sort(*event):
     right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
     # right_control.text = "next first " if tracker_manager.next_first else "next last "
     list_trackers()
+
+@kb.add('t', filter=Condition(lambda: menu_mode[0]))
+def select_tag(*event):
+    """
+    From a keypress corresponding to a tag, move the cursor to the row corresponding to the tag and set the selected_id to the id of the corresponding tracker.
+    """
+    global done_keys, selected_id
+    done_keys = tag_keys
+    message_control.text = key_msg
+    set_key_profile('select')
+
+    for key in tag_keys:
+        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
+
+    def handle_key_press(event, key):
+        key_pressed = event.key_sequence[0].key
+        logger.debug(f"{tracker_manager.tag_to_row = }")
+        if key_pressed in done_keys:
+            set_key_profile('menu')
+            message_control.text = ""
+            if key_pressed == 'escape':
+                return
+
+            tag = (tracker_manager.active_page, key_pressed)
+            selected_id = tracker_manager.tag_to_id.get(tag)
+            row = tracker_manager.tag_to_row.get(tag)
+            logger.debug(f"got id {selected_id} and row {row} from tag {key_pressed}")
+            display_area.buffer.cursor_position = (
+                display_area.buffer.document.translate_row_col_to_index(row, 0)
+            )
 
 def close_dialog(*event):
     action[0] = ""
@@ -1228,26 +1489,40 @@ def close_dialog(*event):
 @kb.add('i', filter=Condition(lambda: menu_mode[0]))
 def tracker_info(*event):
     """Show tracker information"""
+    global done_keys, selected_id
     tracker = get_tracker_from_row()
     logger.debug(f"in tracker_info: {tracker = }")
     action[0] = "info"
     if tracker:
         logger.debug("got tracker from row, calling process_tracker")
-        menu_mode[0] = True
-        select_mode[0] = False
-        dialog_visible[0] = True
-        input_visible[0] = True
-        process_tracker(event, tracker)
-    else:
-        logger.debug("using label selection")
-        menu_mode[0] = True
-        select_mode[0] = True
-        dialog_visible[0] = True
-        input_visible[0] = False
-        message_control.text = f"For information, {key_msg}"
-    # display_message(tracker_manager.list_trackers())
-    # message_control.text = "Adding a new tracker..."
-    # app.layout.focus(input_area)
+        set_key_profile('menu')
+        display_message(tracker.get_tracker_info(), 'info')
+        app.layout.focus(display_area)
+        return
+        # message_control.text = key_msg
+    done_keys = tag_keys
+    message_control.text = key_msg
+    set_key_profile('select')
+
+    for key in tag_keys:
+        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
+
+    def handle_key_press(event, key):
+        key_pressed = event.key_sequence[0].key
+        logger.debug(f"{tracker_manager.tag_to_row = }")
+        if key_pressed in done_keys:
+            set_key_profile('menu')
+            message_control.text = ""
+            if key_pressed == 'escape':
+                return
+
+            tag = (tracker_manager.active_page, key_pressed)
+            selected_id = tracker_manager.tag_to_id.get(tag)
+            tracker = tracker_manager.get_tracker_from_id(selected_id)
+            logger.debug(f"got id {selected_id} and tracker {tracker} from tag {tag}")
+            display_message(tracker.get_tracker_info(), 'info')
+            app.layout.focus(display_area)
+
 
 @kb.add('n', filter=Condition(lambda: menu_mode[0]))
 def new_tracker(*event):
@@ -1338,21 +1613,21 @@ def handle_completion(event):
 # @kb.add('y', 'n')
 # @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
 # @kb.add('n', filter=Condition(lambda: bool_mode[0] == True))
-@kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
-@kb.add('n', filter=Condition(lambda: bool_mode[0] == True))
-def handle_key(event):
-    key_pressed = event.key_sequence[0].key
-    logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-    if key_pressed == 'y':
-        # continue with action[0]
-        input_area.text = "y"
-        # action[0] = action[0]
-    else:
-        input_area.text = "n"
-    logger.debug(f"Key pressed: {key_pressed}, action: '{action[0]}'")
-    input_visible[0] = False
-    dialog_visible[0] = False
-    # event.app.exit()
+# @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
+# @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
+# def handle_key(event):
+#     key_pressed = event.key_sequence[0].key
+#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+#     if key_pressed == 'y':
+#         # continue with action[0]
+#         input_area.text = "y"
+#         # action[0] = action[0]
+#     else:
+#         input_area.text = "n"
+#     logger.debug(f"Key pressed: {key_pressed}, action: '{action[0]}'")
+#     input_visible[0] = False
+#     dialog_visible[0] = False
+#     # event.app.exit()
 
 # @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
 # @kb.add('n', filter=Condition(lambda: bool_mode[0] == True))
@@ -1364,7 +1639,7 @@ def handle_key(event):
 #     confirmation = confirmation_str == "y"
 #     return confirmation
 
-@kb.add('D', filter=Condition(lambda: menu_mode[0]))
+@kb.add('d', filter=Condition(lambda: menu_mode[0]))
 def delete_tracker(*event):
     """Delete a tracker."""
     global selected_id
@@ -1372,33 +1647,39 @@ def delete_tracker(*event):
     logger.debug(f"action: '{action[0]}'")
     tracker = get_tracker_from_row()
     if not tracker:
-        tracker = tracker_manager.get_tracker_from_tag(key)
         logger.debug("using label selection")
-        menu_mode[0] = False
-        select_mode[0] = True
-        dialog_visible[0] = True
-        input_visible[0] = False
+        set_key_profile('select')
+        tracker = tracker_manager.get_tracker_from_tag(key)
     if tracker:
         selected_id = tracker.doc_id
-    if tracker:
         logger.debug("got tracker from row, calling process_tracker")
-        menu_mode[0] = True
-        select_mode[0] = True
-        dialog_visible[0] = True
-        input_visible[0] = False
-        process_tracker(event, tracker)
+        # process_tracker(event, tracker)
     else:
-        tracker = tracker_manager.get_tracker_from_tag(key)
-        logger.debug("using label selection")
-        menu_mode[0] = False
-        select_mode[0] = True
-        dialog_visible[0] = True
-        input_visible[0] = False
+        pass
         # message_control.text = f"{key_msg} delete."
-    bool_mode[0] = True
-    logger.debug(f"bool_mode: {bool_mode[0]}")
-    input_area.text = ""
-    message_control.text = "Are you sure you want to delete this tracker?  yN"
+    result = get_yes_no("Are you sure you want to delete this tracker?  yN")
+    if result['key'] == 'y':
+        tracker_manager.delete_tracker(selected_id)
+        message_control.text = f"Deleted tracker {selected_id}"
+    else:
+        message_control.text = f"Cancelled deletion"
+    list_trackers()
+    # set_key_profile('bool')
+    # logger.debug(f"bool_mode: {bool_mode[0]}")
+    # input_area.text = ""
+    # message_control.text = "Are you sure you want to delete this tracker?  yN"
+
+    # @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
+    # def handle_key(event):
+    #     key_pressed = event.key_sequence[0].key
+    #     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
+    #     if key_pressed == 'y':
+    #         tracker_manager.delete_tracker(selected_id)
+    #         message_control.text = f"Deleted tracker {selected_id}"
+    #     else:
+    #         message_control.text = f"Cancelled deletion"
+    #     set_key_profile('menu')
+    #     list_trackers()
 
 @kb.add('e', filter=Condition(lambda: menu_mode[0]))
 def edit_history(*event):
@@ -1428,16 +1709,15 @@ def select_tracker_from_label(event, key: str):
     global selected_id
     message_control.text = "Press the key of tag for the tracker you want to select."
     tracker = tracker_manager.get_tracker_from_tag(key)
-    selected_id = tracker.doc_id
     if tracker:
-        logger.debug("got tracker from label, calling process_tracker")
+        row = tracker_manager.tag_to_row.get(key)
+        logger.debug(f"got row {row} from tag {key}")
         selected_id = tracker.doc_id
         select_mode[0] = False
-        return tracker
-    return None
-    #     process_tracker(event, tracker)
-    # else:
-    #     list_trackers()
+        display_area.buffer.cursor_position = (
+            display_area.buffer.document.translate_row_col_to_index(row, 0)
+        )
+
 
 confirmation = False
 confirm_command = None
@@ -1480,8 +1760,6 @@ def process_tracker(event, tracker: Tracker = None):
             app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: handle_completion()
         elif action[0] == "info":
-            logger.debug(f"in 'info' ")
-            message_control.text = f"Showing tracker ID {selected_id}"
             select_mode[0] = False
             dialog_visible[0] = False
             input_visible[0] = False
@@ -1494,10 +1772,10 @@ def process_tracker(event, tracker: Tracker = None):
         list_trackers()
 
 # Bind all lowercase letters to select_tracker
-keys = list(string.ascii_lowercase)
-keys.append('escape')
-for key in keys:
-    kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: select_tracker_from_label(event, key))
+# keys = list(string.ascii_lowercase)
+# keys.append('escape')
+# for key in keys:
+#     kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: select_tracker_from_label(event, key))
 
 # Layout
 
@@ -1580,6 +1858,7 @@ root_container = MenuContainer(
                 MenuItem('i) tracker info', handler=tracker_info),
                 MenuItem('l) list trackers', handler=list_trackers),
                 MenuItem('r) reverse sort', handler=reverse_sort),
+                MenuItem('t) select tag', handler=select_tag),
             ]
         ),
     ]
