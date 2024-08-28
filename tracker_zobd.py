@@ -1572,24 +1572,50 @@ def del_example_trackers(*event):
 
 @kb.add('c', filter=Condition(lambda: menu_mode[0]))
 def add_completion(*event):
-    action[0] = "complete"
-    menu_mode[0] = False
-    logger.debug(f"action: '{action[0]}'")
+    global done_keys, selected_id
     tracker = get_tracker_from_row()
+    logger.debug(f"in add_completion: {tracker = }")
+    action[0] = "complete"
     if tracker:
+        selected_id = tracker.doc_id
         logger.debug("got tracker from row, calling process_tracker")
-        menu_mode[0] = True
-        select_mode[0] = False
-        dialog_visible[0] = True
-        input_visible[0] = True
-        process_tracker(event, tracker)
-    else:
-        logger.debug("using label selection")
-        menu_mode[0] = False
-        select_mode[0] = True
-        dialog_visible[0] = True
-        input_visible[0] = False
-        message_control.text = f"{key_msg} add completion."
+        set_key_profile('input')
+        message_control.text = f"Enter the new completion datetime for {tracker.name} (doc_id: {selected_id})"
+        app.layout.focus(input_area)
+        input_area.accept_handler = lambda buffer: handle_completion()
+        return
+
+    done_keys = tag_keys
+    message_control.text = key_msg
+    set_key_profile('select')
+
+    for key in tag_keys:
+        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
+
+    def handle_key_press(event, key):
+        global selected_id
+        key_pressed = event.key_sequence[0].key
+        logger.debug(f"{tracker_manager.tag_to_row = }")
+        if key_pressed in done_keys:
+            if key_pressed == 'escape':
+                return
+            tag = (tracker_manager.active_page, key_pressed)
+            selected_id = tracker_manager.tag_to_id.get(tag)
+            tracker = tracker_manager.get_tracker_from_id(selected_id)
+            logger.debug(f"got id {selected_id} from tag {tag}")
+            set_key_profile('input')
+            message_control.text = f"Enter the new completion datetime for {tracker.name} ({selected_id})"
+            app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: handle_completion()
+
+
+
+        # logger.debug("using label selection")
+        # menu_mode[0] = False
+        # select_mode[0] = True
+        # dialog_visible[0] = True
+        # input_visible[0] = False
+        # message_control.text = f"{key_msg} add completion."
 
 @kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
 def handle_completion(event):
@@ -1601,43 +1627,11 @@ def handle_completion(event):
         ok, completion = Tracker.parse_completion(completion_str)
         logger.debug(f"recording completion_dt: '{completion}' for {selected_id}")
         tracker_manager.record_completion(selected_id, completion)
-        # input_area.text = ""
-        # dialog_visible[0] = False
-        # input_visible[0] = False
         close_dialog()
     else:
         display_area.text = "No completion datetime provided."
     # app.layout.focus(display_area)
 
-
-# @kb.add('y', 'n')
-# @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
-# @kb.add('n', filter=Condition(lambda: bool_mode[0] == True))
-# @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
-# @kb.add('y', 'n', filter=Condition(lambda: bool_mode[0] == True))
-# def handle_key(event):
-#     key_pressed = event.key_sequence[0].key
-#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-#     if key_pressed == 'y':
-#         # continue with action[0]
-#         input_area.text = "y"
-#         # action[0] = action[0]
-#     else:
-#         input_area.text = "n"
-#     logger.debug(f"Key pressed: {key_pressed}, action: '{action[0]}'")
-#     input_visible[0] = False
-#     dialog_visible[0] = False
-#     # event.app.exit()
-
-# @kb.add('y', filter=Condition(lambda: bool_mode[0] == True))
-# @kb.add('n', filter=Condition(lambda: bool_mode[0] == True))
-# def handle_confirmation(event):
-#     global confirmation
-#     """Handle input when Enter is pressed."""
-#     confirmation_str = input_area.text.strip().lower()
-#     logger.debug(f"got confirmation: '{input_area.text}'")
-#     confirmation = confirmation_str == "y"
-#     return confirmation
 
 @kb.add('d', filter=Condition(lambda: menu_mode[0]))
 def delete_tracker(*event):
