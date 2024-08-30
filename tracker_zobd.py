@@ -771,8 +771,8 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
 
     def list_trackers(self):
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%y-%m-%d")
-        width = shutil.get_terminal_size()[0]
-        name_width = width - 30
+        # width = shutil.get_terminal_size()[0]
+        name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
         banner = f"{ZWNJ} tag     next       last     tracker name\n"
@@ -786,7 +786,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
             if len(tracker_name) > name_width:
-                tracker_name = tracker_name[:name_width - 3] + "..."
+                tracker_name = tracker_name[:name_width - 1] + "…"
             spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
             num_spread = self.get_setting('num_spread')
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
@@ -1339,20 +1339,7 @@ labels = "abcdefghijklmnopqrstuvwxyz"
 
 tag_keys = list(string.ascii_lowercase)
 tag_keys.append('escape')
-
 bool_keys = ['y', 'n', 'escape']
-
-# def get_key_press(event):
-#     key_pressed = event.key_sequence[0].key
-#     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
-#     return key_pressed
-
-# def handle_key(event, key):
-#     result['key'] = key
-#     # Remove the prompt from the layout
-#     # root_container.children.remove(prompt_window)
-#     # event.app.layout.focus(root_container.children[0])  # Restore focus
-#     event.app.exit(result=result)
 
 # from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application.current import get_app
