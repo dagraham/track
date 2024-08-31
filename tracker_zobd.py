@@ -298,14 +298,14 @@ class Tracker(Persistent):
         return f"{round(td.total_seconds())}"
 
     @classmethod
-    def format_td(cls, td: timedelta):
+    def format_td(cls, td: timedelta, short=False):
         if not isinstance(td, timedelta):
             return None
         sign = '+' if td.total_seconds() >= 0 else '-'
         total_seconds = abs(int(td.total_seconds()))
         if total_seconds == 0:
             # return '0 minutes '
-            return '+0m'
+            return '0m' if short else '+0m'
         total_seconds = abs(total_seconds)
         try:
             until = []
@@ -319,20 +319,14 @@ class Tracker(Persistent):
                     days = hours // 24
                     hours = hours % 24
             if days:
-                # days_str = 'days' if days > 1 else 'day'
-                days_str = 'd'
-                until.append(f'{days}{days_str}')
+                until.append(f'{days}d')
             if hours:
-                # hours_str = 'hours' if hours > 1 else 'hour'
-                hours_str = 'h'
-                until.append(f'{hours}{hours_str}')
+                until.append(f'{hours}h')
             if minutes:
-                # minutes_str = 'minutes' if minutes > 1 else 'minute'
-                minutes_str = 'm'
-                until.append(f'{minutes}{minutes_str}')
+                until.append(f'{minutes}m')
             if not until:
-                until.append('+0m')
-            ret = sign + ''.join(until)
+                until.append('0m')
+            ret = ''.join(until[:2]) if short else sign + ''.join(until)
             return ret
         except Exception as e:
             logger.debug(f'{td}: {e}')
@@ -485,7 +479,7 @@ class Tracker(Persistent):
         if not self.history:
             result = dict(
                 last_completion=None, num_completions=0, num_intervals=0, average_interval=timedelta(minutes=0), last_interval=timedelta(minutes=0), spread=timedelta(minutes=0), next_expected_completion=None,
-                early=None, late=None
+                early=None, late=None, avg=None
                 )
         else:
             result['last_completion'] = self.history[-1] if len(self.history) > 0 else None
@@ -498,6 +492,7 @@ class Tracker(Persistent):
             result['next_expected_completion'] = None
             result['early'] = None
             result['late'] = None
+            result['avg'] = None
             if result['num_completions'] > 0:
                 for i in range(len(self.history)-1):
                     #                      x[i+1]                  y[i+1]               x[i]
@@ -513,6 +508,10 @@ class Tracker(Persistent):
                 result['next_expected_completion'] = result['last_completion'][0] + result['average_interval']
                 result['early'] = result['next_expected_completion'] - timedelta(days=1)
                 result['late'] = result['next_expected_completion'] + timedelta(days=1)
+                change = result['last_interval'] - result['average_interval']
+                direction = "↑" if change > timedelta(0) else "↓" if change < timedelta(0) else "→"
+                result['avg'] = f"{Tracker.format_td(result['average_interval'], True)}{direction}"
+                logger.debug(f"{result['avg'] = }")
             if result['num_intervals'] >= 2:
                 total = timedelta(minutes=0)
                 for interval in intervals:
@@ -523,6 +522,7 @@ class Tracker(Persistent):
                 result['spread'] = total / result['num_intervals']
                 result['early'] = result['next_expected_completion'] - tracker_manager.settings['num_spread'] * result['spread']
                 result['late'] = result['next_expected_completion'] + tracker_manager.settings['num_spread'] * result['spread']
+
         self._info = result
         self._p_changed = True
         logger.debug(f"returning {result = }")
@@ -611,6 +611,8 @@ class Tracker(Persistent):
     def get_tracker_info(self):
         if not hasattr(self, '_info') or self._info is None:
             self._info = self.compute_info()
+        logger.debug(f"{self._info = }")
+        logger.debug(f"{self._info['avg'] = }")
         # insert a placeholder to prevent date and time from being split across multiple lines when wrapping
         # format_str = f"%y-%m-%d{PLACEHOLDER}%H:%M"
         logger.debug(f"{self.history = }")
@@ -624,9 +626,9 @@ class Tracker(Persistent):
  completions: ({self._info['num_completions']})
     {history}
  intervals:   ({self._info['num_intervals']})
-    last:     {Tracker.format_td(self._info['last_interval'])}
-    average:  {Tracker.format_td(self._info['average_interval'])}
-    spread:   {Tracker.format_td(self._info['spread'])}
+    last:     {Tracker.format_td(self._info['last_interval'], True)}
+    average:  {self._info['avg']}
+    spread:   {Tracker.format_td(self._info['spread'], True)}
  next:        {Tracker.format_dt(self._info['next_expected_completion'])}
     early:    {Tracker.format_dt(self._info.get('early', '?'))}
     late:     {Tracker.format_dt(self._info.get('late', '?'))}
@@ -690,7 +692,7 @@ class TrackerManager:
             f['history'] = serialize_record(v.history)
 
             hsh[k] = f
-        logger.debug(f"{hsh = }")
+        # logger.debug(f"{hsh = }")
         json_data = json.dumps(hsh, indent=2)
         json_file = os.path.join(os.getcwd(), "tracker.json")
         # Write the data to a JSON file
@@ -725,6 +727,7 @@ class TrackerManager:
         self.save_data()
 
         logger.debug(f"Tracker '{name}' added with ID {doc_id}")
+        return doc_id
 
 
     def record_completion(self, doc_id: int, comp: tuple[datetime, timedelta]):
@@ -775,7 +778,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
         name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"{ZWNJ} tag     next       last     tracker name\n"
+        banner = f"{ZWNJ} tag     next      freq      tracker name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
@@ -787,8 +790,8 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             tracker_name = parts[0]
             if len(tracker_name) > name_width:
                 tracker_name = tracker_name[:name_width - 1] + "…"
-            spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
-            num_spread = self.get_setting('num_spread')
+            # spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
+            # num_spread = self.get_setting('num_spread')
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
@@ -800,14 +803,17 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             last_completion = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
             last_dt = last_completion[0] if last_completion else None
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
-            last = last_dt.strftime("%y-%m-%d") if last_dt else center_text("~", 8)
+            avg = tracker._info.get('avg')
+            avg = f"{avg:<8}" if avg else center_text("~", 8)
+            logger.debug(f"freq = '{freq}'")
             tag = TrackerManager.labels[count]
             self.id_to_times[tracker.doc_id] = (early.strftime("%y-%m-%d") if early else '', late.strftime("%y-%m-%d") if late else '')
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
-            rows.append(f" {tag}    {next:<8}  {last:<8}  {tracker_name}")
+            rows.append(f" {tag}    {next:<8}  {avg}  {tracker_name}")
+            logger.debug(f"{rows[-1] = }")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -1043,8 +1049,8 @@ class TrackerLexer(Lexer):
 
                 # Format each part with fixed width
                 tag_formatted = f"  {tag:<5}"          # 7 spaces for tag
-                next_formatted = f"{next_date:^8}   "  # 10 spaces for next date
-                last_formatted = f"{last_date:^8}   "  # 10 spaces for last date
+                next_formatted = f"{next_date:<8}   "  # 10 spaces for next date
+                last_formatted = f"{last_date:<8}   "  # 10 spaces for last date
                 # Add the styled parts to the tokens list
                 tokens.append((tracker_style.get('tag', ''), tag_formatted))
                 tokens.append((next_style, next_formatted))
@@ -1417,11 +1423,6 @@ def refresh_info(*event):
     tracker_manager.refresh_info()
     list_trackers()
 
-@kb.add('t', filter=Condition(lambda: menu_mode[0]))
-def jump_to_tag(*event):
-    pass
-
-
 @kb.add('right', filter=Condition(lambda: menu_mode[0]))
 def next_page(*event):
 
@@ -1454,7 +1455,7 @@ def select_tag(*event):
     From a keypress corresponding to a tag, move the cursor to the row corresponding to the tag and set the selected_id to the id of the corresponding tracker.
     """
     global done_keys, selected_id
-    done_keys = tag_keys
+    done_keys = [x[1] for x in tracker_manager.tag_to_row.keys() if x[0] == tracker_manager.active_page]
     message_control.text = wrap(f" {tag_msg} you would like to select", 0)
     set_key_profile('select')
 
@@ -1559,11 +1560,11 @@ def new_tracker(*event):
 def add_example_trackers(*event):
     import lorem
     from lorem.text import TextLorem
-    lm = TextLorem(srange=(1,3))
+    lm = TextLorem(srange=(2,3))
     import random
     today = datetime.now().replace(microsecond=0,second=0,minute=0,hour=0)
-    for i in range(78):
-        tracker_manager.add_tracker(f"# {lm.sentence()[:-1]}") # remove period at end and record for doc_id i+1
+    for i in range(1,49):
+        doc_id =tracker_manager.add_tracker(f"# {lm.sentence()[:-1]}") # remove period at end and record for doc_id i+1
         num_completions = random.choice(range(0,9,2))
         days = random.choice(range(1,12))
         offset = timedelta(minutes=-720*days)
@@ -1571,8 +1572,8 @@ def add_example_trackers(*event):
             minutes = random.choice(range(-144,144, 12))*days
             offset += timedelta(minutes=days*1440+minutes)
             comp = today - offset
-            tracker_manager.trackers[i+1].record_completion(comp)
-        tracker_manager.trackers[i+1].compute_info()
+            tracker_manager.trackers[doc_id].record_completion(comp)
+        tracker_manager.trackers[doc_id].compute_info()
     list_trackers()
 
 @kb.add('c-r')
