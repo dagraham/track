@@ -46,6 +46,8 @@ import os
 import time
 import json
 
+
+
 import textwrap
 import re
 import __version__ as version
@@ -1855,8 +1857,8 @@ root_container = MenuContainer(
             'edit',
             children=[
                 MenuItem('n) add new tracker', handler=new_tracker),
-                MenuItem('c) add completion', handler=dialog_complete.start_dialog),
-                MenuItem('d) delete tracker', handler=dialog_delete.start_dialog),
+                MenuItem('c) add completion', handler=lambda: dialog_complete.start_dialog(None)),
+                MenuItem('d) delete tracker', handler=lambda: dialog_delete.start_dialog(None)),
                 MenuItem('e) edit completions', handler=edit_history),
                 MenuItem('r) rename tracker', handler=rename_tracker),
             ]
