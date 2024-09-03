@@ -425,7 +425,7 @@ class Tracker(Persistent):
         return f"{cls.format_dt(dt)}, {cls.format_td(td)}"
 
     @classmethod
-    def parse_td(cls, td)->tuple[bool, timedelta]:
+    def parse_td(cls, td:str)->tuple[bool, timedelta]:
         """\
         Take a period string and return a corresponding timedelta.
         Examples:
@@ -477,9 +477,9 @@ class Tracker(Persistent):
         logger.debug(f"parse_td: {td}")
         m = period_regex.findall(td)
         if not m:
-            m = expanded_period_regex.findall(str(s))
+            m = expanded_period_regex.findall(str(td))
             if not m:
-                return False, f"Invalid period string '{s}'"
+                return False, f"Invalid period string '{td}'"
         for g in m:
             if g[3] not in knms:
                 return False, f'Invalid period argument: {g[3]}'
@@ -1547,7 +1547,7 @@ def close_dialog(*event):
     app.layout.focus(display_area)
 
 @kb.add('i', filter=Condition(lambda: menu_mode[0]))
-def tracker_info(*event):
+def inspect_tracker(*event):
     """Show tracker information"""
     global done_keys, selected_id
     tracker = get_tracker_from_row()
@@ -1561,7 +1561,7 @@ def tracker_info(*event):
         return
         # message_control.text = key_msg
     done_keys = tag_keys
-    message_control.text = wrap(f" {tag_msg} you would like to examine", 0)
+    message_control.text = wrap(f" {tag_msg} you would like to inspect", 0)
     set_key_profile('select')
 
     for key in tag_keys:
@@ -1644,105 +1644,6 @@ def del_example_trackers(*event):
         tracker_manager.delete_tracker(id)
     list_trackers()
 
-@kb.add('c', filter=Condition(lambda: menu_mode[0]))
-def add_completion(*event):
-    global done_keys, selected_id
-    tracker = get_tracker_from_row()
-    logger.debug(f"in add_completion: {tracker = }")
-    action[0] = "complete"
-    if tracker:
-        selected_id = tracker.doc_id
-        logger.debug("got tracker from row, calling process_tracker")
-        set_key_profile('input')
-        message_control.text = wrap(f" Enter the new completion datetime for {tracker.name} (doc_id: {selected_id})", 0)
-        app.layout.focus(input_area)
-        input_area.accept_handler = lambda buffer: handle_completion()
-        return
-
-    done_keys = tag_keys
-    message_control.text = wrap(f" {tag_msg} you would like to complete", 0)
-    set_key_profile('select')
-
-    for key in tag_keys:
-        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
-
-    def handle_key_press(event, key_pressed):
-        global selected_id
-        logger.debug(f"{key_pressed = }")
-        if key_pressed in done_keys:
-            if key_pressed == 'escape':
-                set_key_profile('menu')
-                return
-            tag = (tracker_manager.active_page, key_pressed)
-            selected_id = tracker_manager.tag_to_id.get(tag)
-            tracker = tracker_manager.get_tracker_from_id(selected_id)
-            logger.debug(f"got id {selected_id} from tag {tag}")
-            set_key_profile('input')
-            message_control.text = f"Enter the new completion datetime for {tracker.name} ({selected_id})"
-            app.layout.focus(input_area)
-            input_area.accept_handler = lambda buffer: handle_completion()
-
-@kb.add('d', filter=Condition(lambda: menu_mode[0]))
-def delete_tracker(*event):
-    global done_keys, selected_id
-    tracker = get_tracker_from_row()
-    logger.debug(f"in delete_tracker: {tracker = }")
-    action[0] = "delete"
-    if tracker:
-        selected_id = tracker.doc_id
-        logger.debug("got tracker from row")
-        set_key_profile('input')
-        message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {selected_id}) (y/n)?"
-        return
-
-    done_keys = tag_keys
-    message_control.text = wrap(f" {tag_msg} you would like to delete", 0)
-    set_key_profile('select')
-
-    for key in tag_keys:
-        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
-
-    def handle_key_press(event, key):
-        global selected_id
-        key_pressed = event.key_sequence[0].key
-        logger.debug(f"{key_pressed = }")
-        if key_pressed in done_keys:
-            if key_pressed == 'escape':
-                return
-            tag = (tracker_manager.active_page, key_pressed)
-            selected_id = tracker_manager.tag_to_id.get(tag)
-            tracker = tracker_manager.get_tracker_from_id(selected_id)
-            logger.debug(f"got id {selected_id} from tag {tag}")
-            set_key_profile('bool')
-            message_control.text = f"Are you sure you want to delete {tracker.name} ({selected_id}) (y/n)?"
-
-@kb.add('c-s', filter=Condition(lambda: action[0]=="complete"))
-def handle_completion(event):
-    """Handle input when ^s is pressed."""
-    completion_str = input_area.text.strip()
-    logger.debug(f"got completion_str: '{completion_str}' for {selected_id}")
-    if completion_str:
-        ok, completion = Tracker.parse_completion(completion_str)
-        logger.debug(f"recording completion_dt: '{completion}' for {selected_id}")
-        tracker_manager.record_completion(selected_id, completion)
-
-        close_dialog()
-    else:
-        display_area.text = "No completion datetime provided."
-    set_key_profile('menu')
-    app.layout.focus(display_area)
-
-for key in bool_keys:
-    kb.add(key, filter=Condition(lambda: action[0]=='delete'), eager=True)(lambda event, key=key: handle_delete(event, key))
-def handle_delete(event, key):
-    """Handle input when y, n, or escape is pressed."""
-    logger.debug(f"got key {key} for delete {selected_id}")
-    if key == 'y':
-        tracker_manager.delete_tracker(selected_id)
-        logger.debug(f"deleted tracker: {selected_id}")
-    set_key_profile('menu')
-    list_trackers()
-    app.layout.focus(display_area)
 
 @kb.add('e', filter=Condition(lambda: menu_mode[0]))
 def edit_history(*event):
@@ -1832,6 +1733,103 @@ def process_tracker(event, tracker: Tracker = None):
     else:
         list_trackers()
 
+class Dialog:
+    def __init__(self, action_type, kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap):
+        self.action_type = action_type
+        self.kb = kb
+        self.menu_mode = menu_mode
+        self.select_mode = select_mode
+        self.tag_keys = tag_keys
+        self.bool_keys = bool_keys
+        self.tracker_manager = tracker_manager
+        self.message_control = message_control
+        self.display_area = display_area
+        self.wrap = wrap
+        self.app = None  # Initialize without app
+
+    def set_app(self, app):
+        self.app = app
+
+    def start_dialog(self, event):
+        tracker = get_tracker_from_row()
+        logger.debug(f"in {self.action_type}_tracker: {tracker = }")
+        action[0] = self.action_type
+
+        if tracker:
+            self.selected_id = tracker.doc_id
+            logger.debug(f"got tracker from row")
+            self.set_input_mode(tracker)
+        else:
+            self.done_keys = self.tag_keys
+            self.message_control.text = self.wrap(f" {tag_msg} you would like to {self.action_type}", 0)
+            self.set_select_mode()
+
+    def set_input_mode(self, tracker):
+        set_key_profile('input')
+        if self.action_type == "complete":
+            self.message_control.text = wrap(f" Enter the new completion datetime for {tracker.name} (doc_id: {self.selected_id})", 0)
+            self.app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: self.handle_completion()
+            self.kb.add('enter')(self.handle_completion)
+            self.kb.add('c-s')(self.handle_completion)
+
+        elif self.action_type == "delete":
+            self.message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {self.selected_id}) (y/n)?"
+            self.set_bool_mode()
+
+    def set_select_mode(self):
+        set_key_profile('select')
+        for key in self.tag_keys:
+            self.kb.add(key, filter=Condition(lambda: self.select_mode[0]), eager=True)(lambda event, key=key: self.handle_key_press(event, key))
+
+    def handle_key_press(self, event, key_pressed):
+        logger.debug(f"{key_pressed = }")
+        if key_pressed in self.done_keys:
+            if key_pressed == 'escape':
+                set_key_profile('menu')
+                return
+            tag = (self.tracker_manager.active_page, key_pressed)
+            self.selected_id = self.tracker_manager.tag_to_id.get(tag)
+            tracker = self.tracker_manager.get_tracker_from_id(self.selected_id)
+            logger.debug(f"got id {self.selected_id} from tag {tag}")
+            self.set_input_mode(tracker)
+
+    def set_bool_mode(self):
+        set_key_profile('bool')
+        for key in self.bool_keys:
+            self.kb.add(key, filter=Condition(lambda: action[0] == self.action_type), eager=True)(lambda event, key=key: self.handle_bool_press(event, key))
+
+    def handle_bool_press(self, event, key):
+        logger.debug(f"got key {key} for {self.action_type} {self.selected_id}")
+        if key == 'y' and self.action_type == "delete":
+            self.tracker_manager.delete_tracker(self.selected_id)
+            logger.debug(f"deleted tracker: {self.selected_id}")
+        set_key_profile('menu')
+        list_trackers()
+        self.app.layout.focus(self.display_area)
+
+    def handle_completion(self, event=None):
+        completion_str = input_area.text.strip()
+        logger.debug(f"got completion_str: '{completion_str}' for {self.selected_id}")
+        if completion_str:
+            ok, completion = Tracker.parse_completion(completion_str)
+            logger.debug(f"recording completion_dt: '{completion}' for {self.selected_id}")
+            self.tracker_manager.record_completion(self.selected_id, completion)
+            close_dialog()
+        else:
+            self.display_area.text = "No completion datetime provided."
+        set_key_profile('menu')
+        self.app.layout.focus(self.display_area)
+
+# Dialog usage:
+dialog_complete = Dialog("complete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('c', filter=Condition(lambda: menu_mode[0]))(dialog_complete.start_dialog)
+
+dialog_delete = Dialog("delete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
+
+
+
 body = HSplit([
     # menu_container,
     display_area,
@@ -1857,8 +1855,8 @@ root_container = MenuContainer(
             'edit',
             children=[
                 MenuItem('n) add new tracker', handler=new_tracker),
-                MenuItem('c) add completion', handler=add_completion),
-                MenuItem('d) delete tracker', handler=delete_tracker),
+                MenuItem('c) add completion', handler=dialog_complete.start_dialog),
+                MenuItem('d) delete tracker', handler=dialog_delete.start_dialog),
                 MenuItem('e) edit completions', handler=edit_history),
                 MenuItem('r) rename tracker', handler=rename_tracker),
             ]
@@ -1866,7 +1864,7 @@ root_container = MenuContainer(
         MenuItem(
             'view',
             children=[
-                MenuItem('i) tracker info', handler=tracker_info),
+                MenuItem('i) tracker info', handler=inspect_tracker),
                 MenuItem('l) list trackers', handler=list_trackers),
                 MenuItem('r) refresh info', handler=refresh_info),
                 MenuItem('t) select tag', handler=select_tag),
@@ -1882,6 +1880,8 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
+dialog_complete.set_app(app)
+dialog_delete.set_app(app)
 
 def main():
     # global tracker_manager
