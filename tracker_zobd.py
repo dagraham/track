@@ -11,7 +11,6 @@ from prompt_toolkit.layout.containers import (
     ConditionalContainer,
 )
 from prompt_toolkit.layout.dimension import D
-# from prompt_toolkit.layout.containers import Window, ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.keys import Keys
 from prompt_toolkit.key_binding import KeyBindings
@@ -73,6 +72,95 @@ def page_banner(active_page_num: int, number_of_pages: int):
         markers.append(marker)
     return ' '.join(markers)
 
+# Backup and restore
+import zipfile
+
+# Specify the files to include in the backup
+# FIXME: just a first pass
+def backup_to_zip(backup_dir, today):
+    files_to_backup = [os.path.join(track_home, 'tracker.fs'), os.path.join(track_home, 'tracker.fs.index')]
+    # Name of the output zip file
+    backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
+
+    logger.debug(f"backup_to_zip: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
+
+    # Create a zip file and add the files
+    with zipfile.ZipFile(backup_zip, 'w') as zipf:
+        for file in files_to_backup:
+            zipf.write(file)
+
+    logger.info(f"Backup completed: {backup_zip}")
+
+
+def rotate_backups(backup_dir):
+    today = datetime.today()
+    backup_to_zip(backup_dir, today)
+
+    # List all files in the backup directory
+    pattern = re.compile(r'^\d{6}\.zip$')
+    all_files = os.listdir(backup_dir)
+    # Filter the files matching the regex pattern
+    files = [f for f in all_files if pattern.match(f)]
+    names = [os.path.splitext(f)[0] for f in all_files if pattern.match(f)]
+    daily = []
+    recent = []
+    medium = []
+    old = []
+    rlim = (today - timedelta(days=18)).strftime("%y%m%d")
+    mlim = (today - timedelta(days=32)).strftime("%y%m%d")
+    olim = (today - timedelta(days=46)).strftime("%y%m%d")
+
+    names.sort()
+    for name in names:
+        remove = []
+        if name > rlim:
+            daily.append(name)
+        elif name > mlim:
+            recent.append(name)
+        elif name > olim:
+            medium.append(name)
+        else:
+            old.append(name)
+
+        if len(daily) > 3:
+            m = daily.pop(0)
+            recent.append(m)
+        if len(recent) > 1:
+            if recent[0] < rlim:
+                r = recent.pop(0)
+                medium.append(r)
+            else:
+                r = recent.pop(-1)
+                remove.append(r)
+        if len(medium) > 1:
+            if medium[0] < mlim:
+                m = medium.pop(0)
+                old.append(m)
+            else:
+                m = medium.pop(-1)
+                remove.append(m)
+        if len(old) > 1:
+            if old[0] < olim:
+                o = old.pop(0)
+                remove.append(o)
+
+        for r in remove:
+            fp = os.path.join(backup_dir, f"{r}.zip")
+            if os.path.exists(fp):
+                os.remove(fp)
+                print(f"removed {fp}")
+                names.remove(r)
+
+# FIXME: just a first pass
+# def restore_from_zip():
+#     # Name of the zip file to restore from
+#     backup_zip = 'tracker_backup.zip'
+
+#     # Extract the files
+#     with zipfile.ZipFile(backup_zip, 'r') as zipf:
+#         zipf.extractall()
+
+
 # Console logging
 def setup_console_logging():
     # Default logging level
@@ -106,7 +194,6 @@ def setup_file_logging():
 
     logging.basicConfig(
         level=log_level,
-        # format="%(asctime)s [%(levelname)s] %(message)s",
 
         format='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -169,36 +256,36 @@ def deserialize_record(record):
 
     return convert_value(record)
 
-def backup_zodb_to_json(root, json_file):
-    # Convert the ZODB data to a JSON serializable format
-    json_data = {k: serialize_record(v) for k, v in root.items()}
+# def backup_zodb_to_json(root, json_file):
+#     # Convert the ZODB data to a JSON serializable format
+#     json_data = {k: serialize_record(v) for k, v in root.items()}
 
-    # Write the data to a JSON file
-    with open(json_file, 'w') as json_file:
-        json.dump(json_data, json_file, indent=2)
+#     # Write the data to a JSON file
+#     with open(json_file, 'w') as json_file:
+#         json.dump(json_data, json_file, indent=2)
 
-def restore_json_to_zodb(json_file_path, zodb_path):
-    # Open ZODB
-    storage = FileStorage.FileStorage(zodb_path)
-    db = DB(storage)
-    connection = db.open()
-    root = connection.root()
+# def restore_json_to_zodb(json_file_path, zodb_path):
+#     # Open ZODB
+#     storage = FileStorage.FileStorage(zodb_path)
+#     db = DB(storage)
+#     connection = db.open()
+#     root = connection.root()
 
-    # Load the JSON data
-    with open(json_file_path, 'r') as json_file:
-        json_data = json.load(json_file)
+#     # Load the JSON data
+#     with open(json_file_path, 'r') as json_file:
+#         json_data = json.load(json_file)
 
-    # Convert the JSON data back to the original format and restore to ZODB
-    for k, v in json_data.items():
-        root[k] = deserialize_record(v)
+#     # Convert the JSON data back to the original format and restore to ZODB
+#     for k, v in json_data.items():
+#         root[k] = deserialize_record(v)
 
-    # Commit the transaction to save changes
-    transaction.commit()
+#     # Commit the transaction to save changes
+#     transaction.commit()
 
-    # Close ZODB
-    connection.close()
-    db.close()
-    storage.close()
+#     # Close ZODB
+#     connection.close()
+#     db.close()
+#     storage.close()
 
 # Example usage
 # restore_json_to_zodb('/path/to/backup.json', '/path/to/your/Data.fs')
@@ -454,7 +541,6 @@ class Tracker(Persistent):
         return False, "; ".join(msg)
 
 
-
     def __init__(self, name: str, doc_id: int) -> None:
         self.doc_id = int(doc_id)
         self.name = name
@@ -654,7 +740,6 @@ class TrackerManager:
         self.next_first = True
         logger.debug(f"using data from\n  {self.db_path}")
         self.load_data()
-        self.maybe_backup()
 
     def load_data(self):
         try:
@@ -680,24 +765,6 @@ class TrackerManager:
         for k, v in self.settings.items():
             output.append(f"   {k:<10} = {v}")
         return '\n'.join(output)
-
-    def maybe_backup(self):
-        hsh = {}
-        for k, v in self.trackers.items():
-            f = {}
-            f['name'] = v.name
-            f['created'] = serialize_record(v.created)
-            f['modified'] = serialize_record(v.modifed)
-            # _['_info'] = serialize_record(v._info) # can be computed from the other fields
-            f['history'] = serialize_record(v.history)
-
-            hsh[k] = f
-        # logger.debug(f"{hsh = }")
-        json_data = json.dumps(hsh, indent=2)
-        json_file = os.path.join(os.getcwd(), "tracker.json")
-        # Write the data to a JSON file
-        with open(json_file, 'w') as json_file:
-            json.dump(hsh, json_file, indent=3, separators=(',', ': '), sort_keys=False)
 
     def refresh_info(self):
         for k, v in self.trackers.items():
@@ -785,21 +852,13 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
         end_index = start_index + 26
         sorted_trackers = self.get_sorted_trackers()
         for tracker in sorted_trackers[start_index:end_index]:
-            # logger.debug(f"{tracker.doc_id}: {tracker.name}")
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
             if len(tracker_name) > name_width:
                 tracker_name = tracker_name[:name_width - 1] + "…"
-            # spread = tracker._info.get('spread', None) if hasattr(tracker, '_info') else None
-            # num_spread = self.get_setting('num_spread')
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
-            # if num_spread and spread:
-            #     alert = (next_dt - num_spread * spread).strftime("%y-%m-%d")
-            #     warn = (next_dt + num_spread * spread).strftime("%y-%m-%d")
-            # else:
-            #     alert = warn = None
             last_completion = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
             last_dt = last_completion[0] if last_completion else None
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
@@ -886,8 +945,9 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
         finally:
             self.connection.close()
 
-db_file = "/Users/dag/track-test/tracker.fs"
-json_file = "/Users/dag/track-test/tracker.json"
+track_home = "/Users/dag/track-test"
+db_file = os.path.join(track_home, "tracker.fs")
+backup_dir = os.path.join(track_home, "backup")
 tracker_manager = TrackerManager(db_file)
 
 tracker_style = {
@@ -1113,7 +1173,7 @@ style = Style.from_dict({
 
 def check_alarms():
     """Periodic task to check alarms."""
-    today = datetime.now().strftime("%y-%m-%d")
+    today = (datetime.now()-timedelta(days=1)).strftime("%y-%m-%d")
     while True:
         f = freq  # Interval (e.g., 6, 12, 30, 60 seconds)
         s = int(datetime.now().second)
@@ -1126,7 +1186,9 @@ def check_alarms():
         update_status(message)
         newday = ct.strftime("%y-%m-%d")
         if newday != today:
+            logger.debug(f"new day: {newday}")
             today = newday
+            rotate_backups(backup_dir)
 
 def update_status(new_message):
     status_control.text = new_message
@@ -1199,7 +1261,6 @@ def set_lexer(document_type: str):
         display_area.lexer = default_lexer
 
 
-# input_area = TextArea(focusable=True, multiline=True, height=2, prompt='> ', style="class:input-area")
 input_area = TextArea(
     focusable=True,
     multiline=True,
@@ -1228,7 +1289,6 @@ message_window = DynamicContainer(
         style="class:message-window"
     )
 )
-# message_window = Window(content=message_control, height=2, style="class:message-window")
 
 dialog_area = HSplit(
         [
@@ -1404,7 +1464,6 @@ def list_trackers(*event):
     action[0] = "list"
     set_key_profile('menu')
     display_message(tracker_manager.list_trackers(), 'list')
-    # message_control.text = "Adding a new tracker..."
     app.layout.focus(display_area)
     app.invalidate()
 
@@ -1414,7 +1473,6 @@ def list_settings(*event):
     action[0] = "list"
     set_key_profile('menu')
     display_message(tracker_manager.list_settings(), 'info')
-    # message_control.text = "Adding a new tracker..."
     app.layout.focus(display_area)
     app.invalidate()
 
@@ -1635,8 +1693,6 @@ def delete_tracker(*event):
         logger.debug("got tracker from row")
         set_key_profile('input')
         message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {selected_id}) (y/n)?"
-        # app.layout.focus(input_area)
-        # input_area.accept_handler = lambda buffer: handle_completion()
         return
 
     done_keys = tag_keys
@@ -1747,7 +1803,6 @@ def process_tracker(event, tracker: Tracker = None):
             select_mode[0] = False
             dialog_visible[0] = True
             input_visible[0] = False
-            # app.layout.focus(input_area)
             tracker_manager.delete_tracker(selected_id)
             list_trackers()
             # confirmation = get_confirmation(message=message)
