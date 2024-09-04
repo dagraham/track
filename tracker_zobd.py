@@ -39,6 +39,8 @@ import threading
 import traceback
 import sys
 import logging
+from logging.handlers import TimedRotatingFileHandler
+
 from ZODB import DB, FileStorage
 from persistent import Persistent
 import transaction
@@ -170,51 +172,141 @@ def rotate_backups(backup_dir):
 #         zipf.extractall()
 
 
-# Console logging
-def setup_console_logging():
-    # Default logging level
-    log_level = logging.INFO
+# # Console logging
+# def setup_console_logging():
+#     # Default logging level
+#     log_level = logging.INFO
 
-    # Check if a logging level argument was provided
-    if len(sys.argv) > 1:
-        try:
-            # Convert the argument to an integer and set it as the logging level
-            log_level = int(sys.argv[1])
-        except ValueError:
-            print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+#     # Check if a logging level argument was provided
+#     if len(sys.argv) > 1:
+#         try:
+#             # Convert the argument to an integer and set it as the logging level
+#             log_level = int(sys.argv[1])
+#         except ValueError:
+#             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
 
-        # Configure logging
-        logging.basicConfig(
-            level=log_level,
-            format="%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        logging.info(f"\n### Logging initialized at level {log_level} ###")
+#         # Configure logging
+#         logging.basicConfig(
+#             level=log_level,
+#             format="%(asctime)s [%(levelname)s] %(message)s",
+#             datefmt="%Y-%m-%d %H:%M:%S"
+#         )
+#         logging.info(f"\n### Logging initialized at level {log_level} ###")
 
 # File logging
-def setup_file_logging():
+# def setup_file_logging():
+#     log_level = logging.INFO
+
+#     if len(sys.argv) > 1:
+#         try:
+#             log_level = int(sys.argv[1])
+#             sys.argv.pop(1)
+#         except ValueError:
+#             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+
+#     envhome = os.environ.get('TRACKHOME')
+#     if len(sys.argv) > 1:
+#         trackhome = sys.argv[1]
+#     elif envhome:
+#         trackhome = envhome
+#     else:
+#         trackhome = os.getcwd()
+
+#     logfile = os.path.join(trackhome, "logs/tracker.log")
+
+#     logging.basicConfig(
+#         level=log_level,
+
+#         format='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
+#         datefmt="%Y-%m-%d %H:%M:%S",
+#         filename=logfile,  # Output to a file only
+#         filemode="a"  # Append to the file
+#     )
+#     logging.info(f"\n### Logging initialized at level {log_level} ###")
+
+#     return trackhome
+
+def setup_logging():
+    """
+    Set up logging with daily rotation and a specified log level.
+
+    Args:
+        logfile (str): The file where logs will be written.
+        log_level (int): The log level (e.g., logging.DEBUG, logging.INFO).
+        backup_count (int): Number of backup log files to keep.
+    """
+    backup_count = 7
     log_level = logging.INFO
 
     if len(sys.argv) > 1:
         try:
             log_level = int(sys.argv[1])
+            sys.argv.pop(1)
         except ValueError:
             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
 
-    logging.basicConfig(
-        level=log_level,
+    envhome = os.environ.get('TRACKHOME')
+    if len(sys.argv) > 1:
+        trackhome = sys.argv[1]
+    elif envhome:
+        trackhome = envhome
+    else:
+        trackhome = os.getcwd()
+    logfile = os.path.join(trackhome, "logs", "tracker.log")
 
-        format='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
-        datefmt="%Y-%m-%d %H:%M:%S",
-        filename="/Users/dag/track-test/logs/tracker.log",  # Output to a file only
-        filemode="a"  # Append to the file
+
+    # Create a TimedRotatingFileHandler for daily log rotation
+    handler = TimedRotatingFileHandler(
+        logfile, when="midnight", interval=1, backupCount=backup_count
     )
+
+    # Set the suffix to add the date and ".log" extension to the rotated files
+    handler.suffix = "%Y%m%d.log"
+
+    # Create a formatter
+    formatter = logging.Formatter(
+        fmt='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    # Set the formatter to the handler
+    handler.setFormatter(formatter)
+
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    # Clear any existing handlers (if needed)
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # Add the TimedRotatingFileHandler to the logger
+    logger.addHandler(handler)
+
+    # Optionally, add a console handler if you want to log to the console too
+    # console_handler = logging.StreamHandler()
+    # console_handler.setFormatter(formatter)
+    # logger.addHandler(console_handler)
+
+    logger.info("Logging setup complete.")
     logging.info(f"\n### Logging initialized at level {log_level} ###")
 
-# make logging available globally
-setup_file_logging()
-logger = logging.getLogger()
+    return trackhome
 
+
+# # Example usage of setup_logging
+# if __name__ == '__main__':
+#     setup_logging(logfile='mylog.log', log_level=logging.INFO, backup_count=7)
+
+#     # Example log messages
+#     logging.info("This is an info message.")
+#     logging.debug("This is a debug message.")
+#     logging.error("This is an error message.")
+
+
+# make logging available globally
+track_home = setup_logging()
+logger = logging.getLogger()
 logger.debug(f"version: {version.version}")
 
 ### Begin Backup and Restore functions
@@ -1017,7 +1109,7 @@ class TrackerManager:
         finally:
             self.connection.close()
 
-track_home = "/Users/dag/track-test"
+# track_home = "/Users/dag/track-test"
 db_file = os.path.join(track_home, "tracker.fs")
 backup_dir = os.path.join(track_home, "backup")
 tracker_manager = TrackerManager(db_file)
@@ -2123,13 +2215,12 @@ def main():
     # global tracker_manager
     try:
         # TODO: use an environment variable or ~/.tracker/tracker.fs?
-        logging.info(f"Started TrackerManager with database file {db_file}")
+        logger.info(f"Started TrackerManager with database file {db_file}")
 
         display_text = tracker_manager.list_trackers()
         # logging.debug(f"Tracker list: {display_text}")
         display_message(display_text)
-
-
+        logger.debug("got here")
         start_periodic_checks()  # Start the periodic checks
         app.run()
     except Exception as e:
@@ -2139,11 +2230,11 @@ def main():
     finally:
         if tracker_manager:
             tracker_manager.close()
-            logging.info(f"Closed TrackerManager and database file {db_file}")
+            logger.info(f"Closed TrackerManager and database file {db_file}")
             # logger.debug(f" and closed\n  {db_file}")
         else:
-            logging.info("TrackerManager was not initialized")
+            logger.info("TrackerManager was not initialized")
             print("")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
