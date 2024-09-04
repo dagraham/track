@@ -658,6 +658,7 @@ class Tracker(Persistent):
         # Invalidate the cached dict so it will be recomputed on next access
         if hasattr(self, '_info'):
             delattr(self, '_info')
+        self.compute_info()
 
 
     def record_completion(self, completion: tuple[datetime, timedelta]):
@@ -674,6 +675,12 @@ class Tracker(Persistent):
         self.modifed = datetime.now()
         self._p_changed = True
         return True, f"recorded completion for ..."
+
+    def rename(self, name: str):
+        self.name = name
+        self.invalidate_info()
+        self.modifed = datetime.now()
+        self._p_changed = True
 
     def record_completions(self, completions: list[tuple[datetime, timedelta]]):
         self.history = []
@@ -1843,7 +1850,7 @@ class Dialog:
 
     def start_dialog(self, event):
         logger.debug(f"starting dialog for action {self.action_type}")
-        if self.action_type in ["complete", "delete", "edit"]:
+        if self.action_type in ["complete", "delete", "edit", "rename"]:
             tracker = get_tracker_from_row()
             action[0] = self.action_type
             if tracker:
@@ -1879,6 +1886,15 @@ class Dialog:
             input_area.accept_handler = lambda buffer: self.handle_completion()
             self.kb.add('enter')(self.handle_completion)
             self.kb.add('c-s')(self.handle_completion)
+            self.kb.add('escape', eager=True)(self.handle_cancel)
+        elif self.action_type == "rename":
+            self.message_control.text = wrap(f" Edit the name of {tracker.name} (doc_id: {self.selected_id})", 0)
+            # put the formatted completions in the input area
+            input_area.text = wrap(tracker.name, 0)
+            self.app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: self.handle_rename()
+            self.kb.add('enter')(self.handle_rename)
+            self.kb.add('c-s')(self.handle_rename)
             self.kb.add('escape', eager=True)(self.handle_cancel)
         elif self.action_type == "new":
             self.message_control.text = " Enter the name of the new tracker"
@@ -1951,7 +1967,7 @@ class Dialog:
             ok, completions = Tracker.parse_completions(history)
             if ok:
                 logger.debug(f"recording '{completions}' for {self.selected_id}")
-                sself.tracker_manager.record_completions(self.selected_id, completion)
+                self.tracker_manager.record_completions(self.selected_id, completion)
                 close_dialog()
             else:
                 display_message(f"Invalid history: '{completions}'", 'error')
@@ -1972,6 +1988,20 @@ class Dialog:
         else:
             self.display_area.text = "No completion datetime provided."
         set_mode('menu')
+        self.app.layout.focus(self.display_area)
+
+
+    def handle_rename(self, event=None):
+        name_str = input_area.text.strip()
+        logger.debug(f"got name_str: '{name_str}' for {self.selected_id}")
+        if name_str:
+            self.tracker_manager.trackers[self.selected_id].rename(name_str)
+            logger.debug(f"recorded new name: '{name_str}' for {self.selected_id}")
+            close_dialog()
+        else:
+            self.display_area.text = "New name not provided."
+        set_mode('menu')
+        list_trackers()
         self.app.layout.focus(self.display_area)
 
 
@@ -2021,6 +2051,9 @@ kb.add('c', filter=Condition(lambda: menu_mode[0]))(dialog_complete.start_dialog
 dialog_edit = Dialog("edit", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('e', filter=Condition(lambda: menu_mode[0]))(dialog_edit.start_dialog)
 
+dialog_rename = Dialog("rename", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('r', filter=Condition(lambda: menu_mode[0]))(dialog_rename.start_dialog)
+
 dialog_delete = Dialog("delete", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
 
@@ -2056,7 +2089,7 @@ root_container = MenuContainer(
                 MenuItem('c) add completion', handler=lambda: dialog_complete.start_dialog(None)),
                 MenuItem('d) delete tracker', handler=lambda: dialog_delete.start_dialog(None)),
                 MenuItem('e) edit history', handler=lambda: dialog_edit.start_dialog(None)),
-                MenuItem('r) rename tracker', handler=rename_tracker),
+                MenuItem('r) rename tracker', handler=lambda: dialog_rename.start_dialog(None)),
             ]
         ),
         MenuItem(
@@ -2079,7 +2112,7 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort]:
+for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort, dialog_rename]:
     dialog.set_app(app)
 
 # dialog_new.set_app(app)
