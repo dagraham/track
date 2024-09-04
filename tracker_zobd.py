@@ -784,7 +784,7 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        self.sort_by = "next"  # default sort order, also "last", "tracker name", "id"
+        self.sort_by = "forecast"  # default sort order, also "latest", "name"
         logger.debug(f"using data from\n  {self.db_path}")
         self.load_data()
 
@@ -871,23 +871,29 @@ class TrackerManager:
             logger.debug(f"   {doc_id:2> }. {self.trackers[doc_id].get_tracker_data()}")
 
     def sort_key(self, tracker):
-        next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
-        last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
+        forecast_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
+        latest_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
+        if self.sort_by == "forecast":
+            if forecast_dt:
+                return (0, forecast_dt)
+            if latest_dt:
+                return (1, latest_dt)
+            return (2, tracker.doc_id)
         if self.sort_by == "latest":
-            if last_dt:
-                return (1, last_dt)
-            if next_dt:
-                return (2, next_dt)
+            if latest_dt:
+                return (1, latest_dt)
+            if forecast_dt:
+                return (2, forecast_dt)
             return (0, tracker.doc_id)
         elif self.sort_by == "name":
             return (0, tracker.name)
         elif self.sort_by == "id":
             return (0, tracker.doc_id)
-        else: # default to "forecast":
-            if next_dt:
-                return (0, next_dt)
-            if last_dt:
-                return (1, last_dt)
+        else: # forecast
+            if forecast_dt:
+                return (0, forecast_dt)
+            if latest_dt:
+                return (1, latest_dt)
             return (2, tracker.doc_id)
 
     def get_sorted_trackers(self):
@@ -913,25 +919,24 @@ class TrackerManager:
             tracker_name = parts[0]
             if len(tracker_name) > name_width:
                 tracker_name = tracker_name[:name_width - 1] + "…"
-            next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
+            forecast_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
             if tracker.history:
-                last = tracker.history[-1][0].strftime("%y-%m-%d")
+                latest = tracker.history[-1][0].strftime("%y-%m-%d")
             else:
-                last = "~"
-            # logger.debug(f"{last = }")
-            next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
+                latest = "~"
+            forecast = forecast_dt.strftime("%y-%m-%d") if forecast_dt else center_text("~", 8)
             avg = tracker._info.get('avg', None) if hasattr(tracker, '_info') else None
-            freq = f"{avg: <8}" if avg else f"{'~': ^8}"
-            logger.debug(f"freq = '{freq}', {len(freq) = }")
+            interval = f"{avg: <8}" if avg else f"{'~': ^8}"
+            logger.debug(f"interval = '{interval}', {len(interval) = }")
             tag = TrackerManager.labels[count]
             self.id_to_times[tracker.doc_id] = (early.strftime("%y-%m-%d") if early else '', late.strftime("%y-%m-%d") if late else '')
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
-            rows.append(f" {tag}{" "*4}{next}{" "*2}{last}{" "*2}{freq}{" " * 3}{tracker_name}")
+            rows.append(f" {tag}{" "*4}{forecast}{" "*2}{latest}{" "*2}{interval}{" " * 3}{tracker_name}")
         logger.debug(f"{rows = }")
         return banner +"\n".join(rows)
 
@@ -1284,6 +1289,7 @@ menu_mode = [True]
 select_mode = [False]
 bool_mode = [False]
 integer_mode = [False]
+character_mode = [False]
 input_mode = [False]
 dialog_visible = [False]
 input_visible = [False]
@@ -1381,7 +1387,7 @@ page_window = Window(content=page_control, height=1, style="class:status-window"
 
 right_control = FormattedTextControl(text="")
 right_window = Window(content=right_control, height=1, style="class:status-window", width=D(preferred=20), align=WindowAlign.RIGHT)
-# right_control.text = "next/last/neither " if tracker_manager.next_first else "neither/last/next "
+right_control.text = f"{tracker_manager.sort_by} "
 
 
 def set_pages(txt: str):
@@ -1425,48 +1431,61 @@ def read_readme():
 
 kb = KeyBindings()
 
-def set_key_profile(profile: str):
-    if profile == 'menu':
+def set_mode(mode: str):
+    if mode == 'menu':
         # for selecting menu items with a key press
         menu_mode[0] = True
         select_mode[0] = False
         bool_mode[0] = False
         integer_mode[0] = False
+        character_mode[0] = False
         dialog_visible[0] = False
         input_visible[0] = False
-    elif profile == 'select':
+    elif mode == 'select':
         # for selecting rows by a lower case letter key press
         menu_mode[0] = False
         select_mode[0] = True
         bool_mode[0] = False
         integer_mode[0] = False
+        character_mode[0] = False
         dialog_visible[0] = True
         input_visible[0] = False
-    elif profile == 'bool':
+    elif mode == 'bool':
         # for selecting y/n with a key press
         menu_mode[0] = False
         select_mode[0] = False
         bool_mode[0] = True
         integer_mode[0] = False
+        character_mode[0] = False
         dialog_visible[0] = True
         input_visible[0] = False
-    elif profile == 'integer':
+    elif mode == 'integer':
         # for selecting an single digit integer with a key press
         menu_mode[0] = False
         select_mode[0] = False
         bool_mode[0] = False
         integer_mode[0] = True
+        character_mode[0] = False
         dialog_visible[0] = True
         input_visible[0] = False
-    elif profile == 'input':
+    elif mode == 'character':
+        # for selecting an single digit integer with a key press
+        menu_mode[0] = False
+        select_mode[0] = False
+        bool_mode[0] = False
+        integer_mode[0] = False
+        character_mode[0] = True
+        dialog_visible[0] = True
+        input_visible[0] = False
+    elif mode == 'input':
         # for entering text in the input area
         menu_mode[0] = False
         select_mode[0] = False
         bool_mode[0] = False
         integer_mode[0] = False
+        character_mode[0] = False
         dialog_visible[0] = True
         input_visible[0] = True
-
 
 
 tag_msg = "Press the key corresponding to the tag of the tracker"
@@ -1489,7 +1508,7 @@ def get_selection(event):
     logger.debug(f"got key: {key_pressed}; action: '{action[0]}'")
     if key_pressed in labels:
         selected_id = tracker_manager.get_id_from_label(key_pressed)
-        set_key_profile('menu')
+        set_mode('menu')
         list_trackers()
 
 @kb.add('f1')
@@ -1531,16 +1550,16 @@ def display_message(message: str, document_type: str = 'list'):
 def list_trackers(*event):
     """List trackers."""
     action[0] = "list"
-    set_key_profile('menu')
+    set_mode('menu')
     display_message(tracker_manager.list_trackers(), 'list')
     app.layout.focus(display_area)
     app.invalidate()
 
-@kb.add('s', filter=Condition(lambda: menu_mode[0]))
+@kb.add('S', filter=Condition(lambda: menu_mode[0]))
 def list_settings(*event):
     """List settings."""
     action[0] = "list"
-    set_key_profile('menu')
+    set_mode('menu')
     display_message(tracker_manager.list_settings(), 'info')
     app.layout.focus(display_area)
     app.invalidate()
@@ -1584,7 +1603,7 @@ def select_tag(*event):
     global done_keys, selected_id
     done_keys = [x[1] for x in tracker_manager.tag_to_row.keys() if x[0] == tracker_manager.active_page]
     message_control.text = wrap(f" {tag_msg} you would like to select", 0)
-    set_key_profile('select')
+    set_mode('select')
 
     for key in tag_keys:
         kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
@@ -1593,7 +1612,7 @@ def select_tag(*event):
         key_pressed = event.key_sequence[0].key
         logger.debug(f"{tracker_manager.tag_to_row = }")
         if key_pressed in done_keys:
-            set_key_profile('menu')
+            set_mode('menu')
             message_control.text = ""
             if key_pressed == 'escape':
                 return
@@ -1624,14 +1643,14 @@ def inspect_tracker(*event):
     action[0] = "info"
     if tracker:
         logger.debug("got tracker from row, calling process_tracker")
-        set_key_profile('menu')
+        set_mode('menu')
         display_message(tracker.get_tracker_info(), 'info')
         app.layout.focus(display_area)
         return
         # message_control.text = key_msg
     done_keys = tag_keys
     message_control.text = wrap(f" {tag_msg} you would like to inspect", 0)
-    set_key_profile('select')
+    set_mode('select')
 
     for key in tag_keys:
         kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
@@ -1640,7 +1659,7 @@ def inspect_tracker(*event):
         key_pressed = event.key_sequence[0].key
         logger.debug(f"{tracker_manager.tag_to_row = }")
         if key_pressed in done_keys:
-            set_key_profile('menu')
+            set_mode('menu')
             message_control.text = ""
             if key_pressed == 'escape':
                 return
@@ -1803,7 +1822,7 @@ def process_tracker(event, tracker: Tracker = None):
         list_trackers()
 
 class Dialog:
-    def __init__(self, action_type, kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap):
+    def __init__(self, action_type, kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap):
         self.action_type = action_type
         self.kb = kb
         self.menu_mode = menu_mode
@@ -1818,6 +1837,9 @@ class Dialog:
 
     def set_app(self, app):
         self.app = app
+
+    def set_done_keys(self, done_keys: list[str]):
+        self.done_keys = done_keys
 
     def start_dialog(self, event):
         logger.debug(f"starting dialog for action {self.action_type}")
@@ -1836,15 +1858,19 @@ class Dialog:
         elif self.action_type == "new":  # new tracker
             self.set_input_mode(None)
 
+        elif self.action_type == "sort":
+            self.set_sort_mode(None)
+
 
     def set_input_mode(self, tracker):
-        set_key_profile('input')
+        set_mode('input')
         if self.action_type == "complete":
             self.message_control.text = wrap(f" Enter the new completion datetime for {tracker.name} (doc_id: {self.selected_id})", 0)
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_completion()
             self.kb.add('enter')(self.handle_completion)
             self.kb.add('c-s')(self.handle_completion)
+            self.kb.add('escape', eager=True)(self.handle_cancel)
         elif self.action_type == "edit":
             self.message_control.text = wrap(f" Edit the completion datetimes for {tracker.name} (doc_id: {self.selected_id})", 0)
             # put the formatted completions in the input area
@@ -1853,27 +1879,36 @@ class Dialog:
             input_area.accept_handler = lambda buffer: self.handle_completion()
             self.kb.add('enter')(self.handle_completion)
             self.kb.add('c-s')(self.handle_completion)
+            self.kb.add('escape', eager=True)(self.handle_cancel)
         elif self.action_type == "new":
             self.message_control.text = " Enter the name of the new tracker"
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_new()
             self.kb.add('enter')(self.handle_new)
             self.kb.add('c-s')(self.handle_new)
+            self.kb.add('escape', eager=True)(self.handle_cancel)
 
         elif self.action_type == "delete":
             self.message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {self.selected_id}) (y/n)?"
             self.set_bool_mode()
 
     def set_select_mode(self):
-        set_key_profile('select')
+        set_mode('select')
         for key in self.tag_keys:
             self.kb.add(key, filter=Condition(lambda: self.select_mode[0]), eager=True)(lambda event, key=key: self.handle_key_press(event, key))
+
+    def set_sort_mode(self, event=None):
+        set_mode('character')
+        self.message_control.text = wrap(f" Sort by f)orecast, l)atest, n)ame or i)d", 0)
+        self.set_done_keys(['f', 'l', 'n', 'i', 'escape'])
+        for key in self.done_keys:
+            self.kb.add(key, filter=Condition(lambda: character_mode[0]), eager=True)(lambda event, key=key: self.handle_sort(event, key))
 
     def handle_key_press(self, event, key_pressed):
         logger.debug(f"{key_pressed = }")
         if key_pressed in self.done_keys:
             if key_pressed == 'escape':
-                set_key_profile('menu')
+                set_mode('menu')
                 return
             tag = (self.tracker_manager.active_page, key_pressed)
             self.selected_id = self.tracker_manager.tag_to_id.get(tag)
@@ -1882,7 +1917,7 @@ class Dialog:
             self.set_input_mode(tracker)
 
     def set_bool_mode(self):
-        set_key_profile('bool')
+        set_mode('bool')
         for key in self.bool_keys:
             self.kb.add(key, filter=Condition(lambda: action[0] == self.action_type), eager=True)(lambda event, key=key: self.handle_bool_press(event, key))
 
@@ -1891,7 +1926,7 @@ class Dialog:
         if key == 'y' and self.action_type == "delete":
             self.tracker_manager.delete_tracker(self.selected_id)
             logger.debug(f"deleted tracker: {self.selected_id}")
-        set_key_profile('menu')
+        set_mode('menu')
         list_trackers()
         self.app.layout.focus(self.display_area)
 
@@ -1906,7 +1941,7 @@ class Dialog:
                 close_dialog()
         else:
             self.display_area.text = "No completion datetime provided."
-        set_key_profile('menu')
+        set_mode('menu')
         self.app.layout.focus(self.display_area)
 
     def handle_history(self, event=None):
@@ -1923,7 +1958,7 @@ class Dialog:
 
         else:
             display_message("No completion datetime provided.", 'error')
-        set_key_profile('menu')
+        set_mode('menu')
         self.app.layout.focus(self.display_area)
 
     def handle_edit(self, event=None):
@@ -1936,7 +1971,7 @@ class Dialog:
             close_dialog()
         else:
             self.display_area.text = "No completion datetime provided."
-        set_key_profile('menu')
+        set_mode('menu')
         self.app.layout.focus(self.display_area)
 
 
@@ -1948,22 +1983,49 @@ class Dialog:
             close_dialog()
         else:
             self.display_area.text = "No name provided."
-        set_key_profile('menu')
+        set_mode('menu')
         list_trackers()
         self.app.layout.focus(self.display_area)
 
+    def handle_sort(self, event=None, key_pressed=None):
+        if key_pressed in self.done_keys:
+            if key_pressed == 'escape':
+                set_mode('menu')
+                return
+            if key_pressed == 'f':
+                self.tracker_manager.sort_by = 'forecast'
+            elif key_pressed == 'l':
+                self.tracker_manager.sort_by = 'latest'
+            elif key_pressed == 'n':
+                self.tracker_manager.sort_by = 'name'
+            elif key_pressed == 'i':
+                self.tracker_manager.sort_by = 'id'
+            right_control.text = f"{self.tracker_manager.sort_by} "
+            list_trackers()
+            self.app.layout.focus(self.display_area)
+
+    def handle_cancel(self, event=None, key_pressed=None):
+        if key_pressed == 'escape':
+            set_mode('menu')
+            return
+        close_dialog()
+
+
 # Dialog usage:
-dialog_new = Dialog("new", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+dialog_new = Dialog("new", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('n', filter=Condition(lambda: menu_mode[0]))(dialog_new.start_dialog)
 
-dialog_complete = Dialog("complete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+dialog_complete = Dialog("complete", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('c', filter=Condition(lambda: menu_mode[0]))(dialog_complete.start_dialog)
 
-dialog_edit = Dialog("edit", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+dialog_edit = Dialog("edit", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('e', filter=Condition(lambda: menu_mode[0]))(dialog_edit.start_dialog)
 
-dialog_delete = Dialog("delete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+dialog_delete = Dialog("delete", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
+
+dialog_sort = Dialog("sort", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('s', filter=Condition(lambda: menu_mode[0]))(dialog_sort.start_dialog)
 
 
 body = HSplit([
@@ -2003,6 +2065,7 @@ root_container = MenuContainer(
                 MenuItem('i) tracker info', handler=inspect_tracker),
                 MenuItem('l) list trackers', handler=list_trackers),
                 MenuItem('r) refresh info', handler=refresh_info),
+                MenuItem('s) sort', handler=lambda: dialog_sort.start_dialog(None)),
                 MenuItem('t) select tag', handler=select_tag),
             ]
         ),
@@ -2016,7 +2079,7 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit]:
+for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort]:
     dialog.set_app(app)
 
 # dialog_new.set_app(app)
