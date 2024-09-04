@@ -80,9 +80,12 @@ import zipfile
 # Specify the files to include in the backup
 # FIXME: just a first pass
 def backup_to_zip(backup_dir, today):
+    backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
+    if os.path.exists(backup_zip):
+        logger.info(f"Cancelled, backup already exists: {backup_zip}")
+        return (False, f"Backup already exists: {backup_zip}")
     files_to_backup = [os.path.join(track_home, 'tracker.fs'), os.path.join(track_home, 'tracker.fs.index')]
     # Name of the output zip file
-    backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
 
     logger.debug(f"backup_to_zip: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
 
@@ -92,11 +95,15 @@ def backup_to_zip(backup_dir, today):
             zipf.write(file)
 
     logger.info(f"Backup completed: {backup_zip}")
+    return (True, f"Backup completed: {backup_zip}")
 
 
 def rotate_backups(backup_dir):
     today = datetime.today()
-    backup_to_zip(backup_dir, today)
+    ok, msg = backup_to_zip(backup_dir, today)
+    if not ok:
+        logger.debug(msg)
+        return
 
     # List all files in the backup directory
     pattern = re.compile(r'^\d{6}\.zip$')
@@ -375,9 +382,11 @@ class Tracker(Persistent):
     max_history = 12 # depending on width, 6 rows of 2, 4 rows of 3, 3 rows of 4, 2 rows of 6
 
     @classmethod
-    def format_dt(cls, dt: Any) -> str:
+    def format_dt(cls, dt: Any, long=False) -> str:
         if not isinstance(dt, datetime):
             return ""
+        if long:
+            return dt.strftime("%Y-%m-%d %H:%M")
         return dt.strftime("%y%m%dT%H%M")
 
     @classmethod
@@ -422,9 +431,9 @@ class Tracker(Persistent):
             return ''
 
     @classmethod
-    def format_completion(cls, completion: tuple[datetime, timedelta])->str:
+    def format_completion(cls, completion: tuple[datetime, timedelta], long=False)->str:
         dt, td = completion
-        return f"{cls.format_dt(dt)}, {cls.format_td(td)}"
+        return f"{cls.format_dt(dt, long=True)}, {cls.format_td(td)}"
 
     @classmethod
     def parse_td(cls, td:str)->tuple[bool, timedelta]:
@@ -542,6 +551,21 @@ class Tracker(Persistent):
             return True, (dt, td)
         return False, "; ".join(msg)
 
+    @classmethod
+    def parse_completions(cls, completions: List[str]) -> List[tuple[datetime, timedelta]]:
+        completions = [x.strip() for x in completions.split('; ') if x.strip()]
+        output = []
+        msg = []
+        for completion in completions:
+            ok, x = cls.parse_completion(completion)
+            if ok:
+                output.append(x)
+            else:
+                msg.append(x)
+        if msg:
+            return False, "; ".join(msg)
+        return True, output
+
 
     def __init__(self, name: str, doc_id: int) -> None:
         self.doc_id = int(doc_id)
@@ -624,6 +648,12 @@ class Tracker(Persistent):
         self.invalidate_info()
         self._p_changed = True  # Mark object as changed in ZODB
 
+    def format_history(self)->str:
+        output = []
+        for completion in self.history:
+            output.append(Tracker.format_completion(completion, long=True))
+        return '; '.join(output)
+
     def invalidate_info(self):
         # Invalidate the cached dict so it will be recomputed on next access
         if hasattr(self, '_info'):
@@ -644,6 +674,21 @@ class Tracker(Persistent):
         self.modifed = datetime.now()
         self._p_changed = True
         return True, f"recorded completion for ..."
+
+    def record_completions(self, completions: list[tuple[datetime, timedelta]]):
+        self.history = []
+        for completion in completions:
+            if not isinstance(completion, tuple) or len(completion) < 2:
+                completion = (completion, timedelta(0))
+            self.history.append(completion)
+        self.history.sort(key=lambda x: x[0])
+        if len(self.history) > Tracker.max_history:
+            self.history = self.history[-Tracker.max_history:]
+        self.invalidate_info()
+        self.modifed = datetime.now()
+        self._p_changed = True
+        return True, f"recorded completions for ..."
+
 
     def edit_history(self):
         if not self.history:
@@ -739,7 +784,7 @@ class TrackerManager:
         self.db = DB(self.storage)
         self.connection = self.db.open()
         self.root = self.connection.root()
-        self.next_first = True
+        self.sort_by = "next"  # default sort order, also "last", "tracker name", "id"
         logger.debug(f"using data from\n  {self.db_path}")
         self.load_data()
 
@@ -806,9 +851,15 @@ class TrackerManager:
             display_message(msg)
             return
         # self.trackers[doc_id].compute_info()
-        dt, td = comp
-        display_message(f"""\
-Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.trackers[doc_id].get_tracker_info()}""", 'info')
+        display_message(f"{self.trackers[doc_id].get_tracker_info()}", 'info')
+
+    def record_completions(self, completions: list[tuple[datetime, timedelta]]):
+        ok, msg = self.trackers[doc_id].record_completions(completions)
+        if not ok:
+            display_message(msg, 'error')
+            return
+        display_message(f"{self.trackers[doc_id].get_tracker_info()}", 'info')
+
 
     def get_tracker_data(self, doc_id: int = None):
         if doc_id is None:
@@ -822,18 +873,22 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
     def sort_key(self, tracker):
         next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
         last_dt = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
-        if self.next_first:
+        if self.sort_by == "latest":
+            if last_dt:
+                return (1, last_dt)
+            if next_dt:
+                return (2, next_dt)
+            return (0, tracker.doc_id)
+        elif self.sort_by == "name":
+            return (0, tracker.name)
+        elif self.sort_by == "id":
+            return (0, tracker.doc_id)
+        else: # default to "forecast":
             if next_dt:
                 return (0, next_dt)
             if last_dt:
                 return (1, last_dt)
             return (2, tracker.doc_id)
-        else:
-            if next_dt:
-                return (2, next_dt)
-            if last_dt:
-                return (1, last_dt)
-            return (0, tracker.doc_id)
 
     def get_sorted_trackers(self):
         # Extract the list of trackers
@@ -847,7 +902,7 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
         name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"{ZWNJ} tag     next      freq      tracker name\n"
+        banner = f"{ZWNJ} tag   forecast   latest   interval  name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
@@ -861,20 +916,23 @@ Recorded completion ({Tracker.format_dt(dt)}, {Tracker.format_td(td)}):\n {self.
             next_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
-            last_completion = tracker._info.get('last_completion', None) if hasattr(tracker, '_info') else None
-            last_dt = last_completion[0] if last_completion else None
+            if tracker.history:
+                last = tracker.history[-1][0].strftime("%y-%m-%d")
+            else:
+                last = "~"
+            # logger.debug(f"{last = }")
             next = next_dt.strftime("%y-%m-%d") if next_dt else center_text("~", 8)
-            avg = tracker._info.get('avg')
-            avg = f"{avg:<8}" if avg else center_text("~", 8)
-            logger.debug(f"freq = '{freq}'")
+            avg = tracker._info.get('avg', None) if hasattr(tracker, '_info') else None
+            freq = f"{avg: <8}" if avg else f"{'~': ^8}"
+            logger.debug(f"freq = '{freq}', {len(freq) = }")
             tag = TrackerManager.labels[count]
             self.id_to_times[tracker.doc_id] = (early.strftime("%y-%m-%d") if early else '', late.strftime("%y-%m-%d") if late else '')
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
-            rows.append(f" {tag}    {next:<8}  {avg}  {tracker_name}")
-            logger.debug(f"{rows[-1] = }")
+            rows.append(f" {tag}{" "*4}{next}{" "*2}{last}{" "*2}{freq}{" " * 3}{tracker_name}")
+        logger.debug(f"{rows = }")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -1087,7 +1145,7 @@ class TrackerLexer(Lexer):
                     return [(tracker_style.get('default', ''), line)]
 
                 # Extract the parts of the line
-                tag, next_date, last_date, tracker_name = parts[0], parts[1], parts[2], " ".join(parts[3:])
+                tag, next_date, last_date, freq, tracker_name = parts[0], parts[1], parts[2], parts[3], " ".join(parts[4:])
                 id = tracker_manager.tag_to_id.get((active_page, tag), None)
                 alert, warn = tracker_manager.id_to_times.get(id, (None, None))
 
@@ -1095,28 +1153,37 @@ class TrackerLexer(Lexer):
                 if warn and now >= warn:
                     next_style = tracker_style.get('next-warn', '')
                     last_style = tracker_style.get('next-warn', '')
+                    freq_style = tracker_style.get('next-warn', '')
                     name_style = tracker_style.get('next-warn', '')
                 elif alert and now >= alert:
                     next_style = tracker_style.get('next-alert', '')
                     last_style = tracker_style.get('next-alert', '')
+                    freq_style = tracker_style.get('next-alert', '')
                     name_style = tracker_style.get('next-alert', '')
                 elif next_date != "~" and next_date > now:
                     next_style = tracker_style.get('next-fine', '')
                     last_style = tracker_style.get('next-fine', '')
+                    freq_style = tracker_style.get('next-fine', '')
                     name_style = tracker_style.get('next-fine', '')
                 else:
                     next_style = tracker_style.get('default', '')
                     last_style = tracker_style.get('default', '')
+                    freq_style = tracker_style.get('default', '')
                     name_style = tracker_style.get('default', '')
 
                 # Format each part with fixed width
                 tag_formatted = f"  {tag:<5}"          # 7 spaces for tag
-                next_formatted = f"{next_date:<8}   "  # 10 spaces for next date
-                last_formatted = f"{last_date:<8}   "  # 10 spaces for last date
+                next_formatted = f"{next_date:^8}  "  # 10 spaces for next date
+                last_formatted = f"{last_date:^8}  "  # 10 spaces for last date
+                if freq == "~":
+                    freq_formatted = f"{freq:^8}  "  # 10 spaces for freq
+                else:
+                    freq_formatted = f"{freq:<8}  "  # 10 spaces for freq
                 # Add the styled parts to the tokens list
                 tokens.append((tracker_style.get('tag', ''), tag_formatted))
                 tokens.append((next_style, next_formatted))
                 tokens.append((last_style, last_formatted))
+                tokens.append((freq_style, freq_formatted))
                 tokens.append((name_style, tracker_name))
             elif banner_regex.match(line):
                 tokens.append((tracker_style.get('banner', ''), line))
@@ -1586,35 +1653,35 @@ def inspect_tracker(*event):
             app.layout.focus(display_area)
 
 
-@kb.add('n', filter=Condition(lambda: menu_mode[0]))
-def new_tracker(*event):
-    """Add a new tracker."""
-    action[0] = "new"
-    menu_mode[0] = False
-    select_mode[0] = False
-    dialog_visible[0] = True
-    input_visible[0] = True
-    message_control.text = wrap(" Enter the name for the new tracker. Append @ followed by an integer number of days to flag this tracker when this number of days has passed since the last completion.", 0)
-    logger.debug(f"action: {action[0]} getting tracker name ...")
-    app.layout.focus(input_area)
+# @kb.add('n', filter=Condition(lambda: menu_mode[0]))
+# def new_tracker(*event):
+#     """Add a new tracker."""
+#     action[0] = "new"
+#     menu_mode[0] = False
+#     select_mode[0] = False
+#     dialog_visible[0] = True
+#     input_visible[0] = True
+#     message_control.text = wrap(" Enter the name for the new tracker. Append @ followed by an integer number of days to flag this tracker when this number of days has passed since the last completion.", 0)
+#     logger.debug(f"action: {action[0]} getting tracker name ...")
+#     app.layout.focus(input_area)
 
-    input_area.accept_handler = lambda buffer: handle_input()
+#     input_area.accept_handler = lambda buffer: handle_input()
 
-    @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
-    def handle_input(event):
-        """Handle input when Enter is pressed."""
-        parts = [x.strip() for x in input_area.text.split()]
-        tracker_name = parts[0]
-        if tracker_name:
-            logger.debug(f"got tracker name: {tracker_name}")
-            tracker_manager.add_tracker(
-                name=tracker_name,
-                )
-            input_area.text = ""
-            list_trackers()
-        else:
-            message_control.text = "No tracker name provided."
-            list_trackers()
+#     @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
+#     def handle_input(event):
+#         """Handle input when Enter is pressed."""
+#         parts = [x.strip() for x in input_area.text.split()]
+#         tracker_name = parts[0]
+#         if tracker_name:
+#             logger.debug(f"got tracker name: {tracker_name}")
+#             tracker_manager.add_tracker(
+#                 name=tracker_name,
+#                 )
+#             input_area.text = ""
+#             list_trackers()
+#         else:
+#             message_control.text = "No tracker name provided."
+#             list_trackers()
 
 @kb.add('c-e')
 def add_example_trackers(*event):
@@ -1647,15 +1714,15 @@ def del_example_trackers(*event):
     list_trackers()
 
 
-@kb.add('e', filter=Condition(lambda: menu_mode[0]))
-def edit_history(*event):
-    """Edit a tracker history."""
-    action[0] = "edit"
-    menu_mode[0] = False
-    select_mode[0] = True
-    dialog_visible[0] = True
-    input_visible[0] = False
-    message_control.text = wrap(f" {tag_msg} you would like to edit", 0)
+# @kb.add('e', filter=Condition(lambda: menu_mode[0]))
+# def edit_history(*event):
+#     """Edit a tracker history."""
+#     action[0] = "edit"
+#     menu_mode[0] = False
+#     select_mode[0] = True
+#     dialog_visible[0] = True
+#     input_visible[0] = False
+#     message_control.text = wrap(f" {tag_msg} you would like to edit", 0)
 
 def rename_tracker(*event):
     action[0] = "rename"
@@ -1753,18 +1820,22 @@ class Dialog:
         self.app = app
 
     def start_dialog(self, event):
-        tracker = get_tracker_from_row()
-        logger.debug(f"in {self.action_type}_tracker: {tracker = }")
-        action[0] = self.action_type
+        logger.debug(f"starting dialog for action {self.action_type}")
+        if self.action_type in ["complete", "delete", "edit"]:
+            tracker = get_tracker_from_row()
+            action[0] = self.action_type
+            if tracker:
+                self.selected_id = tracker.doc_id
+                logger.debug(f"got tracker from row")
+                self.set_input_mode(tracker)
+            else:
+                self.done_keys = self.tag_keys
+                self.message_control.text = self.wrap(f" {tag_msg} you would like to {self.action_type}", 0)
+                self.set_select_mode()
 
-        if tracker:
-            self.selected_id = tracker.doc_id
-            logger.debug(f"got tracker from row")
-            self.set_input_mode(tracker)
-        else:
-            self.done_keys = self.tag_keys
-            self.message_control.text = self.wrap(f" {tag_msg} you would like to {self.action_type}", 0)
-            self.set_select_mode()
+        elif self.action_type == "new":  # new tracker
+            self.set_input_mode(None)
+
 
     def set_input_mode(self, tracker):
         set_key_profile('input')
@@ -1774,6 +1845,20 @@ class Dialog:
             input_area.accept_handler = lambda buffer: self.handle_completion()
             self.kb.add('enter')(self.handle_completion)
             self.kb.add('c-s')(self.handle_completion)
+        elif self.action_type == "edit":
+            self.message_control.text = wrap(f" Edit the completion datetimes for {tracker.name} (doc_id: {self.selected_id})", 0)
+            # put the formatted completions in the input area
+            input_area.text = wrap(tracker.format_history(), 0)
+            self.app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: self.handle_completion()
+            self.kb.add('enter')(self.handle_completion)
+            self.kb.add('c-s')(self.handle_completion)
+        elif self.action_type == "new":
+            self.message_control.text = " Enter the name of the new tracker"
+            self.app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: self.handle_new()
+            self.kb.add('enter')(self.handle_new)
+            self.kb.add('c-s')(self.handle_new)
 
         elif self.action_type == "delete":
             self.message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {self.selected_id}) (y/n)?"
@@ -1815,6 +1900,37 @@ class Dialog:
         logger.debug(f"got completion_str: '{completion_str}' for {self.selected_id}")
         if completion_str:
             ok, completion = Tracker.parse_completion(completion_str)
+            if ok:
+                logger.debug(f"recording completion_dt: '{completion}' for {self.selected_id}")
+                self.tracker_manager.record_completion(self.selected_id, completion)
+                close_dialog()
+        else:
+            self.display_area.text = "No completion datetime provided."
+        set_key_profile('menu')
+        self.app.layout.focus(self.display_area)
+
+    def handle_history(self, event=None):
+        history = input_area.text.strip()
+        logger.debug(f"got history: '{history}' for {self.selected_id}")
+        if history:
+            ok, completions = Tracker.parse_completions(history)
+            if ok:
+                logger.debug(f"recording '{completions}' for {self.selected_id}")
+                sself.tracker_manager.record_completions(self.selected_id, completion)
+                close_dialog()
+            else:
+                display_message(f"Invalid history: '{completions}'", 'error')
+
+        else:
+            display_message("No completion datetime provided.", 'error')
+        set_key_profile('menu')
+        self.app.layout.focus(self.display_area)
+
+    def handle_edit(self, event=None):
+        completion_str = input_area.text.strip()
+        logger.debug(f"got completion_str: '{completion_str}' for {self.selected_id}")
+        if completion_str:
+            ok, completions = Tracker.parse_completions(completion_str)
             logger.debug(f"recording completion_dt: '{completion}' for {self.selected_id}")
             self.tracker_manager.record_completion(self.selected_id, completion)
             close_dialog()
@@ -1823,13 +1939,31 @@ class Dialog:
         set_key_profile('menu')
         self.app.layout.focus(self.display_area)
 
+
+    def handle_new(self, event=None):
+        name = input_area.text.strip()
+        if name:
+            self.tracker_manager.add_tracker(name)
+            logger.debug(f"added tracker: {name}")
+            close_dialog()
+        else:
+            self.display_area.text = "No name provided."
+        set_key_profile('menu')
+        list_trackers()
+        self.app.layout.focus(self.display_area)
+
 # Dialog usage:
+dialog_new = Dialog("new", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('n', filter=Condition(lambda: menu_mode[0]))(dialog_new.start_dialog)
+
 dialog_complete = Dialog("complete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('c', filter=Condition(lambda: menu_mode[0]))(dialog_complete.start_dialog)
 
+dialog_edit = Dialog("edit", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('e', filter=Condition(lambda: menu_mode[0]))(dialog_edit.start_dialog)
+
 dialog_delete = Dialog("delete", kb, menu_mode, select_mode, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
-
 
 
 body = HSplit([
@@ -1856,10 +1990,10 @@ root_container = MenuContainer(
         MenuItem(
             'edit',
             children=[
-                MenuItem('n) add new tracker', handler=new_tracker),
+                MenuItem('n) add new tracker', handler=lambda: dialog_new.start_dialog(None)),
                 MenuItem('c) add completion', handler=lambda: dialog_complete.start_dialog(None)),
                 MenuItem('d) delete tracker', handler=lambda: dialog_delete.start_dialog(None)),
-                MenuItem('e) edit completions', handler=edit_history),
+                MenuItem('e) edit history', handler=lambda: dialog_edit.start_dialog(None)),
                 MenuItem('r) rename tracker', handler=rename_tracker),
             ]
         ),
@@ -1882,8 +2016,12 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-dialog_complete.set_app(app)
-dialog_delete.set_app(app)
+for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit]:
+    dialog.set_app(app)
+
+# dialog_new.set_app(app)
+# dialog_complete.set_app(app)
+# dialog_delete.set_app(app)
 
 def main():
     # global tracker_manager
