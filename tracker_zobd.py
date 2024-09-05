@@ -84,12 +84,11 @@ import zipfile
 def backup_to_zip(backup_dir, today):
     backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
     if os.path.exists(backup_zip):
-        logger.info(f"Cancelled, backup already exists: {backup_zip}")
-        return (False, f"Backup already exists: {backup_zip}")
+        return (False, f"Cancelled - backup already exists: {backup_zip}")
     files_to_backup = [os.path.join(track_home, 'tracker.fs'), os.path.join(track_home, 'tracker.fs.index')]
     # Name of the output zip file
 
-    logger.debug(f"backup_to_zip: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
+    logger.info(f"backing up: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
 
     # Create a zip file and add the files
     with zipfile.ZipFile(backup_zip, 'w') as zipf:
@@ -104,7 +103,7 @@ def rotate_backups(backup_dir):
     today = datetime.today()
     ok, msg = backup_to_zip(backup_dir, today)
     if not ok:
-        logger.debug(msg)
+        logger.info(msg)
         return
 
     # List all files in the backup directory
@@ -252,8 +251,8 @@ def setup_logging():
         trackhome = envhome
     else:
         trackhome = os.getcwd()
-    logfile = os.path.join(trackhome, "logs", "tracker.log")
 
+    logfile = os.path.join(trackhome, "logs", "tracker.log")
 
     # Create a TimedRotatingFileHandler for daily log rotation
     handler = TimedRotatingFileHandler(
@@ -261,16 +260,24 @@ def setup_logging():
     )
 
     # Set the suffix to add the date and ".log" extension to the rotated files
-    handler.suffix = "%Y%m%d.log"
+    handler.suffix = "%y%m%d.log"
 
     # Create a formatter
     formatter = logging.Formatter(
         fmt='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
-        datefmt="%Y-%m-%d %H:%M:%S"
+        datefmt="%y-%m-%d %H:%M:%S"
     )
 
     # Set the formatter to the handler
     handler.setFormatter(formatter)
+
+    # Define a custom namer function to change the log file naming format
+    def custom_namer(filename):
+        # Replace "tracker.log" with "tracker-" in the rotated log filename
+        return filename.replace("tracker.log", "tracker")
+
+    # Set the handler's namer function
+    handler.namer = custom_namer
 
     # Get the root logger
     logger = logging.getLogger()
@@ -1028,7 +1035,6 @@ class TrackerManager:
             forecast = forecast_dt.strftime("%y-%m-%d") if forecast_dt else center_text("~", 8)
             avg = tracker._info.get('avg', None) if hasattr(tracker, '_info') else None
             interval = f"{avg: <8}" if avg else f"{'~': ^8}"
-            logger.debug(f"interval = '{interval}', {len(interval) = }")
             tag = TrackerManager.labels[count]
             self.id_to_times[tracker.doc_id] = (early.strftime("%y-%m-%d") if early else '', late.strftime("%y-%m-%d") if late else '')
             self.tag_to_id[(self.active_page, tag)] = tracker.doc_id
@@ -1036,7 +1042,6 @@ class TrackerManager:
             self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
             rows.append(f" {tag}{" "*4}{forecast}{" "*2}{latest}{" "*2}{interval}{" " * 3}{tracker_name}")
-        logger.debug(f"{rows = }")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -2214,24 +2219,20 @@ for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_s
 def main():
     # global tracker_manager
     try:
-        # TODO: use an environment variable or ~/.tracker/tracker.fs?
         logger.info(f"Started TrackerManager with database file {db_file}")
 
         display_text = tracker_manager.list_trackers()
-        # logging.debug(f"Tracker list: {display_text}")
         display_message(display_text)
-        logger.debug("got here")
         start_periodic_checks()  # Start the periodic checks
         app.run()
     except Exception as e:
-        logger.debug(f"exception raised:\n{e}")
+        logger.error(f"exception raised:\n{e}")
     else:
-        logger.debug("exited tracker")
+        logger.error("exited tracker")
     finally:
         if tracker_manager:
             tracker_manager.close()
             logger.info(f"Closed TrackerManager and database file {db_file}")
-            # logger.debug(f" and closed\n  {db_file}")
         else:
             logger.info("TrackerManager was not initialized")
             print("")
