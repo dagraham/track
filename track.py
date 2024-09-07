@@ -661,7 +661,7 @@ class Tracker(Persistent):
             result['num_completions'] = len(self.history)
             result['intervals'] = []
             result['num_intervals'] = 0
-            result['spread'] = None
+            result['spread'] = timedelta(minutes=0)
             result['last_interval'] = None
             result['average_interval'] = None
             result['next_expected_completion'] = None
@@ -695,6 +695,7 @@ class Tracker(Persistent):
                     else:
                         total += interval - result['average_interval']
                 result['spread'] = total / result['num_intervals']
+            if result['num_intervals'] >= 1:
                 result['early'] = result['next_expected_completion'] - tracker_manager.settings['k'] * result['spread']
                 result['late'] = result['next_expected_completion'] + tracker_manager.settings['k'] * result['spread']
 
@@ -993,7 +994,9 @@ class TrackerManager:
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
             spread = tracker._info.get('spread', '') if hasattr(tracker, '_info') else ''
+            logger.debug(f"1 {spread = }")
             spread = f"±{Tracker.format_td(spread)[1:]: <8}" if spread else f"{'~': ^8}"
+            logger.debug(f"2 {spread = }")
             if tracker.history:
                 latest = tracker.history[-1][0].strftime("%y-%m-%d")
             else:
@@ -1224,7 +1227,6 @@ class TrackerLexer(Lexer):
                 tag, next_date, spread, last_date, tracker_name = parts[0], parts[1], parts[2], parts[3], " ".join(parts[4:])
                 id = tracker_manager.tag_to_id.get((active_page, tag), None)
                 alert, warn = tracker_manager.id_to_times.get(id, (None, None))
-                # logger.debug(f"{id = } {alert = } {warn = } {now = }")
 
                 # Determine styles based on dates
                 if alert and warn:
@@ -1575,7 +1577,7 @@ labels = "abcdefghijklmnopqrstuvwxyz"
 
 tag_keys = list(string.ascii_lowercase)
 tag_keys.append('escape')
-bool_keys = ['y', 'n', 'escape']
+bool_keys = ['y', 'n', 'escape', 'enter']
 
 # from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application.current import get_app
@@ -1953,7 +1955,7 @@ class Dialog:
         elif self.action_type == "new":  # new tracker
             self.set_input_mode(None)
 
-        elif self.action_type == "settings":  # new tracker
+        elif self.action_type == "settings":
             self.set_input_mode(None)
 
         elif self.action_type == "sort":
@@ -2006,15 +2008,19 @@ class Dialog:
             self.kb.add('escape', eager=True)(self.handle_cancel)
 
         elif self.action_type == "new":
-            self.message_control.text = " Enter the name of the new tracker\nPress 'enter' to save changes or '^c' to cancel"
+            self.message_control.text = """\
+ Enter the name of the new tracker. Optionally append a comma and the datetime
+ of the first completion, and again, optionally, another comma and the timedelta
+ of the expected interval until the next completion, e.g. 'name, 3p wed, +7d'.
+ Press 'enter' to save changes or '^c' to cancel.
+"""
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_new()
             self.kb.add('enter')(self.handle_new)
-            # self.kb.add('c-s')(self.handle_new)
             self.kb.add('escape', eager=True)(self.handle_cancel)
 
         elif self.action_type == "delete":
-            self.message_control.text = f'Are you sure you want to delete "{tracker.name}" (doc_id {self.selected_id}) (y/n)?'
+            self.message_control.text = f'Are you sure you want to delete "{tracker.name}" (doc_id {self.selected_id}) (Y/n)?'
             self.set_bool_mode()
 
     def set_select_mode(self):
@@ -2048,7 +2054,7 @@ class Dialog:
 
     def handle_bool_press(self, event, key):
         logger.debug(f"got key {key} for {self.action_type} {self.selected_id}")
-        if key == 'y' and self.action_type == "delete":
+        if key == 'y' or key == 'enter' and self.action_type == "delete":
             self.tracker_manager.delete_tracker(self.selected_id)
             logger.debug(f"deleted tracker: {self.selected_id}")
         set_mode('menu')
@@ -2132,12 +2138,34 @@ class Dialog:
 
     def handle_new(self, event=None):
         name = input_area.text.strip()
+        msg = []
         if name:
-            self.tracker_manager.add_tracker(name)
-            logger.debug(f"added tracker: {name}")
+            parts = [x.strip() for x in name.split(",")]
+            name = parts[0] if parts else None
+            date = parts[1] if len(parts) > 1 else None
+            interval = parts[2] if len(parts) > 2 else None
+            if name:
+                doc_id = self.tracker_manager.add_tracker(name)
+                logger.debug(f"added tracker: {name}")
+            else:
+                msg.append("No name provided.")
+            if date and not msg:
+                dtok, dt = Tracker.parse_dt(date)
+                if not dtok:
+                    msg.append(dt)
+                else:
+                    # add an initial completion at dt
+                    self.tracker_manager.record_completion(doc_id, (dt, timedelta(0)))
+            if interval and not msg:
+                tdok, td = Tracker.parse_td(interval)
+                if not tdok:
+                    msg.append(td)
+                else:
+                    # add a fictitious completion at td before dt
+                    self.tracker_manager.record_completion(doc_id, (dt-td, timedelta(0)))
             close_dialog()
-        else:
-            self.display_area.text = "No name provided."
+        if msg:
+            self.display_area.text = "\n".join(msg)
         set_mode('menu')
         list_trackers()
         self.app.layout.focus(self.display_area)

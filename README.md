@@ -2,6 +2,8 @@
 
 This is a simple application for tracking the sequence of occasions on which tasks are completed.
 
+### Motivation
+
 As an example, consider the task of "filling the bird feeders". Suppose you want to have an idea when you should next fill them. One approach would be to set a reminder to fill them every 14 days starting from the last time you filled them. When the reminder is triggered, you could check the feeders to see if they are empty. If they are, you could fill them and then perhaps adjust the reminder to repeat every 12 days. On the other hand, if they are not empty, you might adjust the reminder to repeat every 16 days. Repeating this process, you might eventually set a repetition frequency for the reminder that predicts fairly well the next time you should fill them.
 
 The goal of *track* is to save you trouble of going through this iterative process. Here's how it works:
@@ -36,3 +38,19 @@ The main, list view reflects theses calculations. Here is a screenshot again sho
 Since it is currently 2:24pm on September 6 and this is past "late" for the bird feeders, the display shows the bird feeder tracker in a definitely-late color, burnt orange. By comparison, early and late for "between early and late" are, respectively 12pm on September 6 and September 8. Since the current time is within this interval, "between early and late" gets an anytime-now color, gold. Finally early for "before early" is 12pm September 12 and since the current time is earlier than this, "before early" gets a not-yet color, blue.
 
 By default, trackers are sorted by "forecast" but it is also possible to sort by "latest", "name" or "doc_id".  The "forecast" setting lists the trackers in the order in which they will likely need to be completed and colors them by the likely urgency.
+
+### Options when creating a new tracker
+
+When you press 'n' to create a new tracker, the one requirement is that you specify the name of the tracker
+
+      > the name of my tracker
+
+You can, optionally, append a datetime for the first completion, e.g.,
+
+      > the name of my tracker, 3p
+
+would record a completion for 3pm today. You could also, optionally, append a timedelta to use as an estimate for the interval until the next completion, e.g.,
+
+      > the name of my tracker, 3p, +12d
+
+would not only record a completion for 3pm today but also establish 12 days as the expected interval until the next completion will be needed.
