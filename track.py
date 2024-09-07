@@ -272,7 +272,7 @@ def setup_logging():
     else:
         trackhome = os.getcwd()
 
-    logfile = os.path.join(trackhome, "logs", "tracker.log")
+    logfile = os.path.join(trackhome, "logs", "track.log")
 
     # Create a TimedRotatingFileHandler for daily log rotation
     handler = TimedRotatingFileHandler(
@@ -1137,7 +1137,7 @@ class TrackerManager:
             self.connection.close()
 
 # track_home = "/Users/dag/track-test"
-db_file = os.path.join(track_home, "tracker.fs")
+db_file = os.path.join(track_home, "track.fs")
 backup_dir = os.path.join(track_home, "backup")
 tracker_manager = TrackerManager(db_file)
 
