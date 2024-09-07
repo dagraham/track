@@ -190,61 +190,6 @@ def rotate_backups(backup_dir):
 #     with zipfile.ZipFile(backup_zip, 'r') as zipf:
 #         zipf.extractall()
 
-
-# # Console logging
-# def setup_console_logging():
-#     # Default logging level
-#     log_level = logging.INFO
-
-#     # Check if a logging level argument was provided
-#     if len(sys.argv) > 1:
-#         try:
-#             # Convert the argument to an integer and set it as the logging level
-#             log_level = int(sys.argv[1])
-#         except ValueError:
-#             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
-
-#         # Configure logging
-#         logging.basicConfig(
-#             level=log_level,
-#             format="%(asctime)s [%(levelname)s] %(message)s",
-#             datefmt="%Y-%m-%d %H:%M:%S"
-#         )
-#         logging.info(f"\n### Logging initialized at level {log_level} ###")
-
-# File logging
-# def setup_file_logging():
-#     log_level = logging.INFO
-
-#     if len(sys.argv) > 1:
-#         try:
-#             log_level = int(sys.argv[1])
-#             sys.argv.pop(1)
-#         except ValueError:
-#             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
-
-#     envhome = os.environ.get('TRACKHOME')
-#     if len(sys.argv) > 1:
-#         trackhome = sys.argv[1]
-#     elif envhome:
-#         trackhome = envhome
-#     else:
-#         trackhome = os.getcwd()
-
-#     logfile = os.path.join(trackhome, "logs/tracker.log")
-
-#     logging.basicConfig(
-#         level=log_level,
-
-#         format='--- %(asctime)s - %(levelname)s - %(module)s.%(funcName)s\n    %(message)s',
-#         datefmt="%Y-%m-%d %H:%M:%S",
-#         filename=logfile,  # Output to a file only
-#         filemode="a"  # Append to the file
-#     )
-#     logging.info(f"\n### Logging initialized at level {log_level} ###")
-
-#     return trackhome
-
 def setup_logging():
     """
     Set up logging with daily rotation and a specified log level.
@@ -294,7 +239,7 @@ def setup_logging():
     # Define a custom namer function to change the log file naming format
     def custom_namer(filename):
         # Replace "tracker.log" with "tracker-" in the rotated log filename
-        return filename.replace("tracker.log", "tracker")
+        return filename.replace("track.log", "track")
 
     # Set the handler's namer function
     handler.namer = custom_namer
@@ -334,7 +279,7 @@ def setup_logging():
 # make logging available globally
 track_home = setup_logging()
 logger = logging.getLogger()
-logger.debug(f"version: {version.version}")
+logger.info(f"track version: {version.version}; track_home: {track_home}")
 
 ### Begin Backup and Restore functions
 def serialize_record(record):
@@ -1279,24 +1224,24 @@ class TrackerLexer(Lexer):
                 tag, next_date, spread, last_date, tracker_name = parts[0], parts[1], parts[2], parts[3], " ".join(parts[4:])
                 id = tracker_manager.tag_to_id.get((active_page, tag), None)
                 alert, warn = tracker_manager.id_to_times.get(id, (None, None))
-                logger.debug(f"{id = } {alert = } {warn = } {now = }")
+                # logger.debug(f"{id = } {alert = } {warn = } {now = }")
 
                 # Determine styles based on dates
                 if alert and warn:
                     if now < alert:
-                        logger.debug("fine")
+                        # logger.debug("fine")
                         next_style = tracker_style.get('next-fine', '')
                         last_style = tracker_style.get('next-fine', '')
                         spread_style = tracker_style.get('next-fine', '')
                         name_style = tracker_style.get('next-fine', '')
                     elif now >= alert and now < warn:
-                        logger.debug("alert")
+                        # logger.debug("alert")
                         next_style = tracker_style.get('next-alert', '')
                         last_style = tracker_style.get('next-alert', '')
                         spread_style = tracker_style.get('next-alert', '')
                         name_style = tracker_style.get('next-alert', '')
                     elif now >= warn:
-                        logger.debug("warn")
+                        # logger.debug("warn")
                         next_style = tracker_style.get('next-warn', '')
                         last_style = tracker_style.get('next-warn', '')
                         spread_style = tracker_style.get('next-warn', '')
@@ -1445,10 +1390,10 @@ search_field = SearchToolbar(
     ignore_case=True,
     )
 button = "  ⏺️"
-label = " ▶️"
-tag = "  🏷"
-box = "■" # 0x2588
-line_char = "━"
+# label = " ▶️"
+# tag = "  🏷"
+# box = "■" # 0x2588
+# line_char = "━"
 indent = "   "
 
 # NOTE: zero-width space - to mark trackers with next <= today+oneday
