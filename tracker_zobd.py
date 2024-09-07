@@ -25,6 +25,7 @@ from prompt_toolkit.widgets import (
     SearchToolbar,
     MenuContainer,
     MenuItem,
+    HorizontalLine,
 )
 from prompt_toolkit.key_binding.bindings.focus import (
     focus_next,
@@ -47,12 +48,31 @@ import transaction
 import os
 import time
 import json
-
-
+from io import StringIO
 
 import textwrap
 import re
 import __version__ as version
+
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+
+# Initialize YAML object
+yaml = YAML()
+
+# Create a CommentedMap, which behaves like a Python dictionary but supports comments
+settings_map = CommentedMap({
+    'ampm': True,
+    'yearfirst': True,
+    'dayfirst': False,
+    'k': 2
+})
+# Add comments to the dictionary
+settings_map.yaml_set_comment_before_after_key('ampm', before='Track Settings\n\n[ampm] Display 12-hour times with AM or PM if true, \notherwise display 24-hour times')
+settings_map.yaml_set_comment_before_after_key('yearfirst', before='\n[yearfirst] When parsing ambiguous dates, assume the year is first if true, \notherwise assume the month is first')
+settings_map.yaml_set_comment_before_after_key('dayfirst', before='\n[dayfirst] When parsing ambiguous dates, assume the day is first if true, \notherwise assume the month is first')
+settings_map.yaml_set_comment_before_after_key('k', before='\n[k] Use this integer multiple of "spread" for setting the early-to-late \nforecast confidence interval')
+
 
 tracker_manager = None
 
@@ -686,7 +706,6 @@ class Tracker(Persistent):
     def compute_info(self):
         # Example computation based on history, returning a dict
         result = {}
-        logger.debug(f"got here")
         if not self.history:
             result = dict(
                 last_completion=None, num_completions=0, num_intervals=0, average_interval=timedelta(minutes=0), last_interval=timedelta(minutes=0), spread=timedelta(minutes=0), next_expected_completion=None,
@@ -695,7 +714,7 @@ class Tracker(Persistent):
         else:
             result['last_completion'] = self.history[-1] if len(self.history) > 0 else None
             result['num_completions'] = len(self.history)
-            intervals = []
+            result['intervals'] = []
             result['num_intervals'] = 0
             result['spread'] = None
             result['last_interval'] = None
@@ -708,35 +727,35 @@ class Tracker(Persistent):
                 for i in range(len(self.history)-1):
                     #                      x[i+1]                  y[i+1]               x[i]
                     logger.debug(f"{self.history[i+1]}")
-                    intervals.append(self.history[i+1][0] + self.history[i+1][1] - self.history[i][0])
-                result['num_intervals'] = len(intervals)
+                    result['intervals'].append(self.history[i+1][0] + self.history[i+1][1] - self.history[i][0])
+                result['num_intervals'] = len(result['intervals'])
             if result['num_intervals'] > 0:
-                result['last_interval'] = intervals[-1]
+                # result['last_interval'] = intervals[-1]
                 if result['num_intervals'] == 1:
-                    result['average_interval'] = intervals[-1]
+                    result['average_interval'] = result['intervals'][-1]
                 else:
-                    result['average_interval'] = sum(intervals, timedelta()) / result['num_intervals']
+                    result['average_interval'] = sum(result['intervals'], timedelta()) / result['num_intervals']
                 result['next_expected_completion'] = result['last_completion'][0] + result['average_interval']
                 result['early'] = result['next_expected_completion'] - timedelta(days=1)
                 result['late'] = result['next_expected_completion'] + timedelta(days=1)
-                change = result['last_interval'] - result['average_interval']
+                change = result['intervals'][-1] - result['average_interval']
                 direction = "↑" if change > timedelta(0) else "↓" if change < timedelta(0) else "→"
                 result['avg'] = f"{Tracker.format_td(result['average_interval'], True)}{direction}"
                 logger.debug(f"{result['avg'] = }")
             if result['num_intervals'] >= 2:
                 total = timedelta(minutes=0)
-                for interval in intervals:
+                for interval in result['intervals']:
                     if interval < result['average_interval']:
                         total += result['average_interval'] - interval
                     else:
                         total += interval - result['average_interval']
                 result['spread'] = total / result['num_intervals']
-                result['early'] = result['next_expected_completion'] - tracker_manager.settings['num_spread'] * result['spread']
-                result['late'] = result['next_expected_completion'] + tracker_manager.settings['num_spread'] * result['spread']
+                result['early'] = result['next_expected_completion'] - tracker_manager.settings['k'] * result['spread']
+                result['late'] = result['next_expected_completion'] + tracker_manager.settings['k'] * result['spread']
 
         self._info = result
         self._p_changed = True
-        logger.debug(f"returning {result = }")
+        # logger.debug(f"returning {result = }")
 
         return result
 
@@ -782,6 +801,7 @@ class Tracker(Persistent):
         self._p_changed = True
 
     def record_completions(self, completions: list[tuple[datetime, timedelta]]):
+        logger.debug(f"starting {self.history = }")
         self.history = []
         for completion in completions:
             if not isinstance(completion, tuple) or len(completion) < 2:
@@ -790,6 +810,7 @@ class Tracker(Persistent):
         self.history.sort(key=lambda x: x[0])
         if len(self.history) > Tracker.max_history:
             self.history = self.history[-Tracker.max_history:]
+        logger.debug(f"ending {self.history = }")
         self.invalidate_info()
         self.modifed = datetime.now()
         self._p_changed = True
@@ -857,6 +878,8 @@ class Tracker(Persistent):
         logger.debug(f"{self.history = }")
         history = [f"{Tracker.format_dt(x[0])} {Tracker.format_td(x[1])}" for x in self.history]
         history = ', '.join(history)
+        intervals = [f"{Tracker.format_td(x)}" for x in self._info['intervals']]
+        intervals = ', '.join(intervals)
         return wrap(f"""\
  name:        {self.name}
  doc_id:      {self.doc_id}
@@ -865,10 +888,10 @@ class Tracker(Persistent):
  completions: ({self._info['num_completions']})
     {history}
  intervals:   ({self._info['num_intervals']})
-    last:     {Tracker.format_td(self._info['last_interval'], True)}
+    {intervals}
     average:  {self._info['avg']}
     spread:   {Tracker.format_td(self._info['spread'], True)}
- next:        {Tracker.format_dt(self._info['next_expected_completion'])}
+ forecast:    {Tracker.format_dt(self._info['next_expected_completion'])}
     early:    {Tracker.format_dt(self._info.get('early', '?'))}
     late:     {Tracker.format_dt(self._info.get('late', '?'))}
 """, 0)
@@ -897,11 +920,7 @@ class TrackerManager:
     def load_data(self):
         try:
             if 'settings' not in self.root:
-                self.root['settings'] = {}
-                self.root['settings']['num_spread'] = 1.5
-                self.root['settings']['ampm'] = True
-                self.root['settings']['yearfirst'] = True
-                self.root['settings']['dayfirst'] = False
+                self.root['settings'] = settings_map
                 transaction.commit()
             self.settings = self.root['settings']
             if 'trackers' not in self.root:
@@ -913,11 +932,11 @@ class TrackerManager:
             logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
 
-    def list_settings(self):
-        output = ["Tracker settings:"]
-        for k, v in self.settings.items():
-            output.append(f"   {k:<10} = {v}")
-        return '\n'.join(output)
+    def restore_settings(self):
+        self.root['settings'] = settings_map
+        self.save_settings = self.root['settings']
+        transaction.commit()
+        logger.info("Restored default settings.")
 
     def refresh_info(self):
         for k, v in self.trackers.items():
@@ -959,7 +978,7 @@ class TrackerManager:
         # self.trackers[doc_id].compute_info()
         display_message(f"{self.trackers[doc_id].get_tracker_info()}", 'info')
 
-    def record_completions(self, completions: list[tuple[datetime, timedelta]]):
+    def record_completions(self, doc_id: int, completions: list[tuple[datetime, timedelta]]):
         ok, msg = self.trackers[doc_id].record_completions(completions)
         if not ok:
             display_message(msg, 'error')
@@ -1014,7 +1033,7 @@ class TrackerManager:
         name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"{ZWNJ} tag   forecast   latest   interval  name\n"
+        banner = f"{ZWNJ} tag   forecast   spread    latest   name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
@@ -1028,6 +1047,8 @@ class TrackerManager:
             forecast_dt = tracker._info.get('next_expected_completion', None) if hasattr(tracker, '_info') else None
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
+            spread = tracker._info.get('spread', '') if hasattr(tracker, '_info') else ''
+            spread = f"±{Tracker.format_td(spread)[1:]: <8}" if spread else f"{'~': ^8}"
             if tracker.history:
                 latest = tracker.history[-1][0].strftime("%y-%m-%d")
             else:
@@ -1041,7 +1062,8 @@ class TrackerManager:
             self.row_to_id[(self.active_page, count+1)] = tracker.doc_id
             self.tag_to_row[(self.active_page, tag)] = count+1
             count += 1
-            rows.append(f" {tag}{" "*4}{forecast}{" "*2}{latest}{" "*2}{interval}{" " * 3}{tracker_name}")
+            # rows.append(f" {tag}{" "*4}{forecast}{" "*2}{latest}{" "*2}{interval}{" " * 3}{tracker_name}")
+            rows.append(f" {tag}{" "*4}{forecast}{" "*2}{spread}{" "*2}{latest}{" " * 3}{tracker_name}")
         return banner +"\n".join(rows)
 
     def set_active_page(self, page_num):
@@ -1254,45 +1276,55 @@ class TrackerLexer(Lexer):
                     return [(tracker_style.get('default', ''), line)]
 
                 # Extract the parts of the line
-                tag, next_date, last_date, freq, tracker_name = parts[0], parts[1], parts[2], parts[3], " ".join(parts[4:])
+                tag, next_date, spread, last_date, tracker_name = parts[0], parts[1], parts[2], parts[3], " ".join(parts[4:])
                 id = tracker_manager.tag_to_id.get((active_page, tag), None)
                 alert, warn = tracker_manager.id_to_times.get(id, (None, None))
+                logger.debug(f"{id = } {alert = } {warn = } {now = }")
 
                 # Determine styles based on dates
-                if warn and now >= warn:
-                    next_style = tracker_style.get('next-warn', '')
-                    last_style = tracker_style.get('next-warn', '')
-                    freq_style = tracker_style.get('next-warn', '')
-                    name_style = tracker_style.get('next-warn', '')
-                elif alert and now >= alert:
-                    next_style = tracker_style.get('next-alert', '')
-                    last_style = tracker_style.get('next-alert', '')
-                    freq_style = tracker_style.get('next-alert', '')
-                    name_style = tracker_style.get('next-alert', '')
+                if alert and warn:
+                    if now < alert:
+                        logger.debug("fine")
+                        next_style = tracker_style.get('next-fine', '')
+                        last_style = tracker_style.get('next-fine', '')
+                        spread_style = tracker_style.get('next-fine', '')
+                        name_style = tracker_style.get('next-fine', '')
+                    elif now >= alert and now < warn:
+                        logger.debug("alert")
+                        next_style = tracker_style.get('next-alert', '')
+                        last_style = tracker_style.get('next-alert', '')
+                        spread_style = tracker_style.get('next-alert', '')
+                        name_style = tracker_style.get('next-alert', '')
+                    elif now >= warn:
+                        logger.debug("warn")
+                        next_style = tracker_style.get('next-warn', '')
+                        last_style = tracker_style.get('next-warn', '')
+                        spread_style = tracker_style.get('next-warn', '')
+                        name_style = tracker_style.get('next-warn', '')
                 elif next_date != "~" and next_date > now:
                     next_style = tracker_style.get('next-fine', '')
                     last_style = tracker_style.get('next-fine', '')
-                    freq_style = tracker_style.get('next-fine', '')
+                    spread_style = tracker_style.get('next-fine', '')
                     name_style = tracker_style.get('next-fine', '')
                 else:
                     next_style = tracker_style.get('default', '')
                     last_style = tracker_style.get('default', '')
-                    freq_style = tracker_style.get('default', '')
+                    spread_style = tracker_style.get('default', '')
                     name_style = tracker_style.get('default', '')
 
                 # Format each part with fixed width
                 tag_formatted = f"  {tag:<5}"          # 7 spaces for tag
                 next_formatted = f"{next_date:^8}  "  # 10 spaces for next date
                 last_formatted = f"{last_date:^8}  "  # 10 spaces for last date
-                if freq == "~":
-                    freq_formatted = f"{freq:^8}  "  # 10 spaces for freq
+                if spread == "~":
+                    spread_formatted = f"{spread:^8}  "  # 10 spaces for freq
                 else:
-                    freq_formatted = f"{freq:<8}  "  # 10 spaces for freq
+                    spread_formatted = f"{spread:^8}  "  # 10 spaces for freq
                 # Add the styled parts to the tokens list
                 tokens.append((tracker_style.get('tag', ''), tag_formatted))
                 tokens.append((next_style, next_formatted))
+                tokens.append((spread_style, spread_formatted))
                 tokens.append((last_style, last_formatted))
-                tokens.append((freq_style, freq_formatted))
                 tokens.append((name_style, tracker_name))
             elif banner_regex.match(line):
                 tokens.append((tracker_style.get('banner', ''), line))
@@ -1444,7 +1476,7 @@ input_area = TextArea(
     focusable=True,
     multiline=True,
     prompt='> ',
-    height=D(preferred=1, max=5),  # Set preferred and max height
+    height=D(preferred=1, max=10),  # Set preferred and max height
     style="class:input-area"
 )
 
@@ -1464,7 +1496,7 @@ message_control = FormattedTextControl(text="")
 message_window = DynamicContainer(
     lambda: Window(
         content=message_control,
-        height=D(preferred=1, max=3),  # Adjust max height as needed
+        height=D(preferred=1, max=4),  # Adjust max height as needed
         style="class:message-window"
     )
 )
@@ -1472,6 +1504,7 @@ message_window = DynamicContainer(
 dialog_area = HSplit(
         [
             message_window,
+            HorizontalLine(),
             input_container,
         ]
     )
@@ -1659,16 +1692,27 @@ def list_trackers(*event):
     app.layout.focus(display_area)
     app.invalidate()
 
-@kb.add('S', filter=Condition(lambda: menu_mode[0]))
-def list_settings(*event):
-    """List settings."""
-    action[0] = "list"
-    set_mode('menu')
-    display_message(tracker_manager.list_settings(), 'info')
-    app.layout.focus(display_area)
-    app.invalidate()
+# # @kb.add('S', filter=Condition(lambda: menu_mode[0]))
+# def list_settings(*event):
+#     """List settings."""
+#     action[0] = "list"
+#     set_mode('menu')
 
-@kb.add('r', filter=Condition(lambda: menu_mode[0]))
+#     yaml_string = StringIO()
+
+#     # Step 2: Dump the CommentedMap into the StringIO object
+#     yaml.dump(settings_map, yaml_string)
+
+#     # Step 3: Get the string from the StringIO object
+#     yaml_output = yaml_string.getvalue()
+
+
+#     # display_message(tracker_manager.list_settings(), 'info')
+#     display_message(yaml_output, 'info')
+#     app.layout.focus(display_area)
+#     app.invalidate()
+
+@kb.add('R', filter=Condition(lambda: menu_mode[0]))
 def refresh_info(*event):
     tracker_manager.refresh_info()
     list_trackers()
@@ -1947,7 +1991,9 @@ class Dialog:
 
     def start_dialog(self, event):
         logger.debug(f"starting dialog for action {self.action_type}")
-        if self.action_type in ["complete", "delete", "edit", "rename"]:
+        if self.action_type in [
+            "complete", "delete", "edit", "rename"
+            ]:
             tracker = get_tracker_from_row()
             action[0] = self.action_type
             if tracker:
@@ -1962,6 +2008,9 @@ class Dialog:
         elif self.action_type == "new":  # new tracker
             self.set_input_mode(None)
 
+        elif self.action_type == "settings":  # new tracker
+            self.set_input_mode(None)
+
         elif self.action_type == "sort":
             self.set_sort_mode(None)
 
@@ -1969,40 +2018,58 @@ class Dialog:
     def set_input_mode(self, tracker):
         set_mode('input')
         if self.action_type == "complete":
-            self.message_control.text = wrap(f" Enter the new completion datetime for {tracker.name} (doc_id: {self.selected_id})", 0)
+            self.message_control.text = wrap(f' Enter the new completion datetime for "{tracker.name}" (doc_id {self.selected_id})', 0)
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_completion()
             self.kb.add('enter')(self.handle_completion)
-            self.kb.add('c-s')(self.handle_completion)
-            self.kb.add('escape', eager=True)(self.handle_cancel)
+            # self.kb.add('c-s')(self.handle_completion)
+            self.kb.add('c-c', eager=True)(self.handle_cancel)
+
         elif self.action_type == "edit":
-            self.message_control.text = wrap(f" Edit the completion datetimes for {tracker.name} (doc_id: {self.selected_id})", 0)
+            self.message_control.text = wrap(f' Edit the completion datetimes for "{tracker.name}" (doc_id {self.selected_id})\n Press "enter" to save changes or "^c" to cancel', 0)
             # put the formatted completions in the input area
             input_area.text = wrap(tracker.format_history(), 0)
             self.app.layout.focus(input_area)
-            input_area.accept_handler = lambda buffer: self.handle_completion()
-            self.kb.add('enter')(self.handle_completion)
-            self.kb.add('c-s')(self.handle_completion)
-            self.kb.add('escape', eager=True)(self.handle_cancel)
+            input_area.accept_handler = lambda buffer: self.handle_history()
+            self.kb.add('enter')(self.handle_history)
+            # self.kb.add('c-s')(self.handle_history)
+            self.kb.add('c-c', eager=True)(self.handle_cancel)
+
         elif self.action_type == "rename":
-            self.message_control.text = wrap(f" Edit the name of {tracker.name} (doc_id: {self.selected_id})", 0)
+            self.message_control.text = wrap(f' Edit the name of "{tracker.name}" (doc_id {self.selected_id})\n Press "enter" to save changes or "^c" to cancel', 0)
             # put the formatted completions in the input area
             input_area.text = wrap(tracker.name, 0)
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_rename()
             self.kb.add('enter')(self.handle_rename)
-            self.kb.add('c-s')(self.handle_rename)
+            # self.kb.add('c-s')(self.handle_rename)
+            self.kb.add('c-c', eager=True)(self.handle_cancel)
+
+        elif self.action_type == "settings":
+            self.message_control.text = " Edit settings. \nPress 'enter' to save changes or '^c' to cancel"
+            settings_map = self.tracker_manager.settings
+            yaml_string = StringIO()
+            # Step 2: Dump the CommentedMap into the StringIO object
+            yaml.dump(settings_map, yaml_string)
+            # Step 3: Get the string from the StringIO object
+            yaml_output = yaml_string.getvalue()
+            input_area.text = yaml_output
+            self.app.layout.focus(input_area)
+            input_area.accept_handler = lambda buffer: self.handle_settings()
+            self.kb.add('enter')(self.handle_settings)
+            # self.kb.add('c-s')(self.handle_settings)
             self.kb.add('escape', eager=True)(self.handle_cancel)
+
         elif self.action_type == "new":
-            self.message_control.text = " Enter the name of the new tracker"
+            self.message_control.text = " Enter the name of the new tracker\nPress 'enter' to save changes or '^c' to cancel"
             self.app.layout.focus(input_area)
             input_area.accept_handler = lambda buffer: self.handle_new()
             self.kb.add('enter')(self.handle_new)
-            self.kb.add('c-s')(self.handle_new)
+            # self.kb.add('c-s')(self.handle_new)
             self.kb.add('escape', eager=True)(self.handle_cancel)
 
         elif self.action_type == "delete":
-            self.message_control.text = f"Are you sure you want to delete {tracker.name} (doc_id: {self.selected_id}) (y/n)?"
+            self.message_control.text = f'Are you sure you want to delete "{tracker.name}" (doc_id {self.selected_id}) (y/n)?'
             self.set_bool_mode()
 
     def set_select_mode(self):
@@ -2064,7 +2131,7 @@ class Dialog:
             ok, completions = Tracker.parse_completions(history)
             if ok:
                 logger.debug(f"recording '{completions}' for {self.selected_id}")
-                self.tracker_manager.record_completions(self.selected_id, completion)
+                self.tracker_manager.record_completions(self.selected_id, completions)
                 close_dialog()
             else:
                 display_message(f"Invalid history: '{completions}'", 'error')
@@ -2080,7 +2147,7 @@ class Dialog:
         if completion_str:
             ok, completions = Tracker.parse_completions(completion_str)
             logger.debug(f"recording completion_dt: '{completion}' for {self.selected_id}")
-            self.tracker_manager.record_completion(self.selected_id, completion)
+            self.tracker_manager.record_completions(self.selected_id, completion)
             close_dialog()
         else:
             self.display_area.text = "No completion datetime provided."
@@ -2101,6 +2168,22 @@ class Dialog:
         list_trackers()
         self.app.layout.focus(self.display_area)
 
+    def handle_settings(self, event=None):
+
+        yaml_string = input_area.text
+        if yaml_string:
+            yaml_input = StringIO(yaml_string)
+            updated_settings = yaml.load(yaml_input)
+
+            # Step 2: Update the original CommentedMap with the new data
+            # This will overwrite only the changed values while keeping the structure.
+            self.tracker_manager.settings.update(updated_settings)
+            transaction.commit()
+            logger.debug(f"updated settings:\n{yaml_string}")
+            close_dialog()
+        set_mode('menu')
+        list_trackers()
+        self.app.layout.focus(self.display_area)
 
     def handle_new(self, event=None):
         name = input_area.text.strip()
@@ -2150,6 +2233,9 @@ kb.add('e', filter=Condition(lambda: menu_mode[0]))(dialog_edit.start_dialog)
 
 dialog_rename = Dialog("rename", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('r', filter=Condition(lambda: menu_mode[0]))(dialog_rename.start_dialog)
+
+dialog_settings = Dialog("settings", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('S', filter=Condition(lambda: menu_mode[0]))(dialog_settings.start_dialog)
 
 dialog_delete = Dialog("delete", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
@@ -2209,7 +2295,7 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort, dialog_rename]:
+for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort, dialog_rename, dialog_settings]:
     dialog.set_app(app)
 
 # dialog_new.set_app(app)
