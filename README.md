@@ -33,6 +33,6 @@ The main, list view reflects theses calculations. Here is a screenshot again sho
 
 ![list view](tracker_list.png)
 
-Since it is currently 2:24pm on September 6 and this is past "late" for the bird feeders, the display shows the bird feeder tracker in a warning color, burnt orange. By comparison, the forecast for "between early and late" is actually today and since the current time is within 2 * 12h of the forecast, "between early and late" gets an alert color, gold. Finally the forecast for "before early" is September 13 since the current time is more than 2 * 12h before the forecast, "before early" gets a not yet relevant color, blue.
+Since it is currently 2:24pm on September 6 and this is past "late" for the bird feeders, the display shows the bird feeder tracker in a warning color, burnt orange. By comparison, the forecast for "between early and late" is actually today and since the current time is within 2 * 12h of the forecast, "between early and late" gets an alert color, gold. Finally the forecast for "before early" is September 13 and since the current time is more than 2 * 12h before the forecast, "before early" gets a not-yet-relevant color, blue.
 
 By default, trackers are sorted by "forecast" but it is also possible to sort by "latest", "name" or "doc_id".  The "forecast" setting lists the trackers in the order in which they will likely need to be completed and colors them by the likely urgency.
