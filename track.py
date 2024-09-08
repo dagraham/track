@@ -334,115 +334,16 @@ def setup_logging():
     # Add the TimedRotatingFileHandler to the logger
     logger.addHandler(handler)
 
-    # Optionally, add a console handler if you want to log to the console too
-    # console_handler = logging.StreamHandler()
-    # console_handler.setFormatter(formatter)
-    # logger.addHandler(console_handler)
-
     logger.info("Logging setup complete.")
     logging.info(f"\n### Logging initialized at level {log_level} ###")
 
     return trackhome
-
-
-# # Example usage of setup_logging
-# if __name__ == '__main__':
-#     setup_logging(logfile='mylog.log', log_level=logging.INFO, backup_count=7)
-
-#     # Example log messages
-#     logging.info("This is an info message.")
-#     logging.debug("This is a debug message.")
-#     logging.error("This is an error message.")
-
 
 # make logging available globally
 track_home = setup_logging()
 logger = logging.getLogger()
 logger.info(f"track version: {version.version}; track_home: {track_home}")
 
-### Begin Backup and Restore functions
-def serialize_record(record):
-    def convert_value(value):
-        if isinstance(value, datetime):
-            return value.strftime("%y%m%dT%H%M")  # Convert datetime to ISO format string
-        elif isinstance(value, timedelta):
-            return str(int(value.total_seconds()/60))  # Convert timedelta to minutes
-        elif isinstance(value, tuple) and len(value) == 2:
-            if isinstance(value[0], datetime) and isinstance(value[1], timedelta):
-                return (value[0].strftime("%y%m%dT%H%M"), str(int(value[1].total_seconds()/60)))
-            else:
-                return tuple(convert_value(v) for v in value)
-        elif isinstance(value, list):
-            return [convert_value(v) for v in value]  # Process each element in the list
-        elif isinstance(value, dict):
-            return {k: convert_value(v) for k, v in value.items()}
-        else:
-            return value
-
-    return convert_value(record)
-
-def deserialize_record(record):
-    def convert_value(value):
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value)
-            except ValueError:
-                pass
-            try:
-                return timedelta(seconds=float(value))
-            except ValueError:
-                pass
-        if isinstance(value, tuple) and len(value) == 2:
-            try:
-                dt = datetime.fromisoformat(value[0])
-                td = timedelta(seconds=float(value[1]))
-                return (dt, td)
-            except ValueError:
-                return tuple(convert_value(v) for v in value)
-        elif isinstance(value, list):
-            return [convert_value(v) for v in value]  # Process each element in the list
-        elif isinstance(value, dict):
-            return {k: convert_value(v) for k, v in value.items()}
-        else:
-            return value
-
-    return convert_value(record)
-
-# def backup_zodb_to_json(root, json_file):
-#     # Convert the ZODB data to a JSON serializable format
-#     json_data = {k: serialize_record(v) for k, v in root.items()}
-
-#     # Write the data to a JSON file
-#     with open(json_file, 'w') as json_file:
-#         json.dump(json_data, json_file, indent=2)
-
-# def restore_json_to_zodb(json_file_path, zodb_path):
-#     # Open ZODB
-#     storage = FileStorage.FileStorage(zodb_path)
-#     db = DB(storage)
-#     connection = db.open()
-#     root = connection.root()
-
-#     # Load the JSON data
-#     with open(json_file_path, 'r') as json_file:
-#         json_data = json.load(json_file)
-
-#     # Convert the JSON data back to the original format and restore to ZODB
-#     for k, v in json_data.items():
-#         root[k] = deserialize_record(v)
-
-#     # Commit the transaction to save changes
-#     transaction.commit()
-
-#     # Close ZODB
-#     connection.close()
-#     db.close()
-#     storage.close()
-
-# Example usage
-# restore_json_to_zodb('/path/to/backup.json', '/path/to/your/Data.fs')
-
-### End Backup and Restore functions
 
 def wrap(text: str, indent: int = 3, width: int = shutil.get_terminal_size()[0] - 2):
     # Preprocess to replace spaces within specific "@\S" patterns with PLACEHOLDER
@@ -944,7 +845,7 @@ class TrackerManager:
 
     def load_data(self):
         try:
-            if True:  # 'settings' not in self.root:
+            if 'settings' not in self.root:
                 self.root['settings'] = settings_map
                 transaction.commit()
             self.settings = self.root['settings']
@@ -957,15 +858,17 @@ class TrackerManager:
             logger.debug(f"Warning: could not load data from '{self.db_path}': {str(e)}")
             self.trackers = {}
 
-    def restore_settings(self):
+    def restore_defaults(self):
         self.root['settings'] = settings_map
-        self.save_settings = self.root['settings']
+        self.settings = self.root['settings']
         transaction.commit()
-        logger.info("Restored default settings.")
+        logger.info(f"Restored default settings:\n{self.settings}")
+        self.refresh_info()
 
     def refresh_info(self):
         for k, v in self.trackers.items():
             v.compute_info()
+        logger.info("Refreshed tracker info.")
 
     def set_setting(self, key, value):
 
@@ -1064,7 +967,7 @@ class TrackerManager:
         start_index = self.active_page * 26
         end_index = start_index + 26
         sorted_trackers = self.get_sorted_trackers()
-        sigma = tracker_manager.settings.get('σ', 1)
+        sigma = self.settings.get('σ', 1)
         for tracker in sorted_trackers[start_index:end_index]:
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
@@ -1691,7 +1594,12 @@ def do_about(*event):
 def do_check_updates(*event):
     display_message('update info ...')
 
-@kb.add('f4')
+@kb.add('f6')
+def do_restore_defaults(*event):
+    tracker_manager.restore_defaults()
+    display_message("Defaults restored.", 'info')
+
+@kb.add('f7')
 def do_help(*event):
     help_text = read_readme()
     display_message(wrap(help_text, 0), 'help')
@@ -1737,7 +1645,7 @@ def list_trackers(*event):
 #     app.layout.focus(display_area)
 #     app.invalidate()
 
-@kb.add('R', filter=Condition(lambda: menu_mode[0]))
+@kb.add('f5', filter=Condition(lambda: menu_mode[0]))
 def refresh_info(*event):
     tracker_manager.refresh_info()
     list_trackers()
@@ -2286,7 +2194,7 @@ dialog_rename = Dialog("rename", kb, tag_keys, bool_keys, tracker_manager, messa
 kb.add('r', filter=Condition(lambda: menu_mode[0]))(dialog_rename.start_dialog)
 
 dialog_settings = Dialog("settings", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
-kb.add('S', filter=Condition(lambda: menu_mode[0]))(dialog_settings.start_dialog)
+kb.add('f4', filter=Condition(lambda: menu_mode[0]))(dialog_settings.start_dialog)
 
 dialog_delete = Dialog("delete", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('d', filter=Condition(lambda: menu_mode[0]))(dialog_delete.start_dialog)
@@ -2312,7 +2220,10 @@ root_container = MenuContainer(
                 MenuItem('F1) toggle menu', handler=menu),
                 MenuItem('F2) about track', handler=do_about),
                 MenuItem('F3) check for updates', handler=do_check_updates),
-                MenuItem('F4) help', handler=do_help),
+                MenuItem('F4) edit settings', handler=lambda: dialog_settings.start_dialog(None)),
+                MenuItem('F5) refresh info', handler=refresh_info),
+                MenuItem('F6) restore default settings', handler=do_restore_defaults),
+                MenuItem('F7) help', handler=do_help),
                 MenuItem('^q) quit', handler=exit_app),
             ]
         ),
@@ -2331,7 +2242,6 @@ root_container = MenuContainer(
             children=[
                 MenuItem('i) tracker info', handler=inspect_tracker),
                 MenuItem('l) list trackers', handler=list_trackers),
-                MenuItem('r) refresh info', handler=refresh_info),
                 MenuItem('s) sort', handler=lambda: dialog_sort.start_dialog(None)),
                 MenuItem('t) select tag', handler=select_tag),
             ]
