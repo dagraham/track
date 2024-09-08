@@ -57,6 +57,14 @@ import __version__ as version
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
+def clear_screen():
+    # For Windows
+    if os.name == 'nt':
+        os.system('cls')
+    # For macOS and Linux (posix systems)
+    else:
+        os.system('clear')
+
 # Initialize YAML object
 yaml = YAML()
 
@@ -65,13 +73,13 @@ settings_map = CommentedMap({
     'ampm': True,
     'yearfirst': True,
     'dayfirst': False,
-    'k': 2
+    'σ': 2
 })
 # Add comments to the dictionary
 settings_map.yaml_set_comment_before_after_key('ampm', before='Track Settings\n\n[ampm] Display 12-hour times with AM or PM if true, \notherwise display 24-hour times')
 settings_map.yaml_set_comment_before_after_key('yearfirst', before='\n[yearfirst] When parsing ambiguous dates, assume the year is first if true, \notherwise assume the month is first')
 settings_map.yaml_set_comment_before_after_key('dayfirst', before='\n[dayfirst] When parsing ambiguous dates, assume the day is first if true, \notherwise assume the month is first')
-settings_map.yaml_set_comment_before_after_key('k', before='\n[k] Use this integer multiple of "spread" for setting the early-to-late \nforecast confidence interval')
+settings_map.yaml_set_comment_before_after_key('σ', before='\n[σ] Use this integer multiple of "spread" for setting the early-to-late \nforecast confidence interval')
 
 
 tracker_manager = None
@@ -100,28 +108,44 @@ def page_banner(active_page_num: int, number_of_pages: int):
 import zipfile
 
 # Specify the files to include in the backup
-# FIXME: just a first pass
-def backup_to_zip(backup_dir, today):
-    backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
-    if os.path.exists(backup_zip):
-        return (False, f"Cancelled - backup already exists: {backup_zip}")
-    files_to_backup = [os.path.join(track_home, 'tracker.fs'), os.path.join(track_home, 'tracker.fs.index')]
-    # Name of the output zip file
+# FIXME: just a first paso
+def backup_to_zip(track_home, today):
+    backup_dir = os.path.join(track_home, 'backup')
+    files_to_backup = [os.path.join(track_home, 'track.fs'), os.path.join(track_home, 'track.fs.index')]
 
-    logger.info(f"backing up: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
+    for file in files_to_backup:
+        if not os.path.exists(file):
+            return (False, f"Cancelled - {file} does not exist")
+
+    if today == 'remove':
+        files_to_backup +=  [os.path.join(track_home, 'track.fs.tmp'), os.path.join(track_home, 'track.fs.lock')]
+        backup_zip = os.path.join(track_home, 'backup', f"removed.zip")
+    else:
+        # files_to_backup = [os.path.join(track_home, 'track.fs'), os.path.join(track_home, 'track.fs.index')]
+        backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
+        if os.path.exists(backup_zip):
+            return (False, f"Cancelled - backup already exists: {backup_zip}")
+
+    # print(f"backing up: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
 
     # Create a zip file and add the files
     with zipfile.ZipFile(backup_zip, 'w') as zipf:
         for file in files_to_backup:
             zipf.write(file)
 
-    logger.info(f"Backup completed: {backup_zip}")
+
+    if today == 'remove':
+        for fp in files_to_backup:
+            if os.path.exists(fp):
+                os.remove(fp)
+        return (True, f"Backup completed and original files removed. ")
+
     return (True, f"Backup completed: {backup_zip}")
 
 
 def rotate_backups(backup_dir):
     today = datetime.today()
-    ok, msg = backup_to_zip(backup_dir, today)
+    ok, msg = backup_to_zip(track_home, today)
     if not ok:
         logger.info(msg)
         return
@@ -182,13 +206,60 @@ def rotate_backups(backup_dir):
                 names.remove(r)
 
 # FIXME: just a first pass
-# def restore_from_zip():
-#     # Name of the zip file to restore from
-#     backup_zip = 'tracker_backup.zip'
+def restore_from_zip(track_home):
+    clear_screen()
+    backup_dir = os.path.join(track_home, 'backup')
+    print(f"""
+ Choosing one of the 'restore from' options listed below will
 
-#     # Extract the files
-#     with zipfile.ZipFile(backup_zip, 'r') as zipf:
-#         zipf.extractall()
+    1) compress all track.fs* files in {track_home} into "remove.zip"
+       in {backup_dir}, overwriting "remove.zip" if it exists
+
+    2) remove all track.fs* files from {track_home}
+
+    3) restore the files "track.fs" and "track.fs.index" from the
+       selected zip file into {track_home}
+
+ Note: The file "remove.zip" will be overwritten by any subsequent
+ restore operation.
+
+ WARNING: Choosing an option other than "0: cancel" CANNOT BE UNDONE.
+""")
+    pattern = re.compile(r'^\d{6}\.zip$')
+    all_files = os.listdir(backup_dir)
+    names = [os.path.splitext(f)[0] for f in all_files if pattern.match(f)]
+    names.sort(reverse=True)
+
+    restore_options = {'0': 'cancel'}
+    for i, name in enumerate(names, 1):
+        restore_options[str(i)] = name
+
+    while True:
+        print(" Options:")
+        for opt, value in restore_options.items():
+            print(f"    {opt}: restore from '{value}'" if opt != '0' else f"    {opt}: {restore_options[opt]}")
+
+        choice = input("Choose an option: ").strip().lower()
+        if choice in restore_options:
+            if choice == '0':
+                print("Restore cancelled.")
+                sys.exit()
+            #  we have a valid restore option
+            # Extract the files
+            ok, msg = backup_to_zip(track_home, 'remove')
+            print(msg)
+            chosen_name = restore_options[choice]
+            backup_zip = os.path.join(backup_dir, chosen_name + '.zip')
+            print(f"Extracting files from {backup_zip}")
+
+            with zipfile.ZipFile(backup_zip, 'r') as zipf:
+                zipf.extractall()
+            sys.exit()
+
+        else:
+            print("Invalid option. Please choose again.")
+
+
 
 def setup_logging():
     """
@@ -217,6 +288,14 @@ def setup_logging():
     else:
         trackhome = os.getcwd()
 
+    restore = len(sys.argv) > 2 and sys.argv[2] == 'restore'
+
+    if restore:
+        # backup_dir = os.path.join(trackhome, 'backup')
+        restore_from_zip(trackhome)
+        sys.exit()
+
+
     logfile = os.path.join(trackhome, "logs", "track.log")
 
     # Create a TimedRotatingFileHandler for daily log rotation
@@ -238,8 +317,8 @@ def setup_logging():
 
     # Define a custom namer function to change the log file naming format
     def custom_namer(filename):
-        # Replace "tracker.log" with "tracker-" in the rotated log filename
-        return filename.replace("track.log", "track")
+        # Replace "tracker.log." with "tracker-" in the rotated log filename
+        return filename.replace("track.log.", "track")
 
     # Set the handler's namer function
     handler.namer = custom_namer
@@ -696,8 +775,8 @@ class Tracker(Persistent):
                         total += interval - result['average_interval']
                 result['spread'] = total / result['num_intervals']
             if result['num_intervals'] >= 1:
-                result['early'] = result['next_expected_completion'] - tracker_manager.settings['k'] * result['spread']
-                result['late'] = result['next_expected_completion'] + tracker_manager.settings['k'] * result['spread']
+                result['early'] = result['next_expected_completion'] - tracker_manager.settings['σ'] * result['spread']
+                result['late'] = result['next_expected_completion'] + tracker_manager.settings['σ'] * result['spread']
 
         self._info = result
         self._p_changed = True
@@ -865,7 +944,7 @@ class TrackerManager:
 
     def load_data(self):
         try:
-            if 'settings' not in self.root:
+            if True:  # 'settings' not in self.root:
                 self.root['settings'] = settings_map
                 transaction.commit()
             self.settings = self.root['settings']
@@ -979,12 +1058,13 @@ class TrackerManager:
         name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"{ZWNJ} tag   forecast   spread    latest   name\n"
+        banner = f"{ZWNJ} tag   forecast  σ spread   latest   name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
         end_index = start_index + 26
         sorted_trackers = self.get_sorted_trackers()
+        sigma = tracker_manager.settings.get('σ', 1)
         for tracker in sorted_trackers[start_index:end_index]:
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
@@ -994,9 +1074,8 @@ class TrackerManager:
             early = tracker._info.get('early', '') if hasattr(tracker, '_info') else ''
             late = tracker._info.get('late', '') if hasattr(tracker, '_info') else ''
             spread = tracker._info.get('spread', '') if hasattr(tracker, '_info') else ''
-            logger.debug(f"1 {spread = }")
-            spread = f"±{Tracker.format_td(spread)[1:]: <8}" if spread else f"{'~': ^8}"
-            logger.debug(f"2 {spread = }")
+            # spread = f"±{Tracker.format_td(spread)[1:]: <8}" if spread else f"{'~': ^8}"
+            spread = f"{Tracker.format_td(sigma*spread)[1:]: <8}" if spread else f"{'~': ^8}"
             if tracker.history:
                 latest = tracker.history[-1][0].strftime("%y-%m-%d")
             else:
@@ -1084,7 +1163,6 @@ class TrackerManager:
         finally:
             self.connection.close()
 
-# track_home = "/Users/dag/track-test"
 db_file = os.path.join(track_home, "track.fs")
 backup_dir = os.path.join(track_home, "backup")
 tracker_manager = TrackerManager(db_file)

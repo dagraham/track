@@ -1,12 +1,13 @@
 # track
 
-This is a simple application for tracking the sequence of occasions on which tasks are completed.
+This is a simple application for tracking the sequence of occasions on which a task is completed and predicting when the next completion might be needed.
 
 ### Motivation
 
-As an example, consider the task of "filling the bird feeders". Suppose you want to have an idea when you should next fill them. One approach would be to set a reminder to fill them every 14 days starting from the last time you filled them. When the reminder is triggered, you could check the feeders to see if they are empty. If they are, you could fill them and then perhaps adjust the reminder to repeat every 12 days. On the other hand, if they are not empty, you might adjust the reminder to repeat every 16 days. Repeating this process, you might eventually set a repetition frequency for the reminder that predicts fairly well the next time you should fill them.
+As an example, consider the task of "filling the bird feeders". Suppose you want to have an idea when you should next fill them. One approach would be to set a reminder to fill them every 14 days starting from the last time you filled them. When the reminder is triggered, you could check the feeders to see if they are empty. If they are, you could fill them and then perhaps adjust the reminder to repeat every 13 days. On the other hand, if they are not yet empty, you might adjust the reminder to repeat every 15 days. Repeating this process, you might eventually set a repetition frequency for the reminder that predicts fairly well the next time you should fill them.
 
 The goal of *track* is to save you trouble of going through this iterative process. Here's how it works:
+
 
 1. In *track*, press "n" to add a new tracker and name it "fill bird feeders".
 2. The first time you fill the feeders, press "c" to add a completion, select the "fill bird feeders" tracker and enter the date and time of the completion. This date and time will be added to the history of completions for the "fill bird feeders" tracker.
@@ -26,10 +27,10 @@ Here is a part of a screenshot from the "inspect" display for the "fill bird fee
 
 ![inspect view](tracker_inspect.png)
 
-Note that the first interval, 8 days 1 hour, is the difference between 240808T1400 + 1 day and 240808T1300.  The other intervals are computed in the same way. The average interval is just the sum of the three intervals divided by 3. The little upward pointing arrow after the average interval indicates that, since the last interval is greater than the average, the average is increasing.  The spread is the average of the absolute values of the differences between the intervals and the average interval. This MAD (mean average deviation) is a standard measure of the spread of a series. These calculations are used in two ways:
+Note that the first interval, `8 days 1 hour`, is the difference between `240808T1400 + 1 day` and `240808T1300`.  The other intervals are computed in the same way. The `average` interval is just the sum of the three intervals divided by 3. The little upward pointing arrow after the average interval indicates that, since the last interval is greater than the average, the average is increasing.  The spread is the average of the absolute values of the differences between the intervals and the average interval. This MAD (mean average deviation) is a standard measure of the spread of a series. These calculations are used in two ways:
 
-1. The forecast for when the next completion will be due is the sum of the last completion datetime and the average interval.
-2. The confidence we might have in this forecast depends upon the spread. If the spread is small, we would expect the actual interval between the last completion and the next completion to be close to the average. Chebyshev's Inequality says, in fact, that the proportion of intervals that lie within k * spread of the average interval must be at least 1 - 1/k^2. In the screenshot "early" is forecast - k * spread and "late" is forecast + k * spread, where k, by default, is 2 (user setting). With this setting at least 75% of the intervals would put the actual outcome between "early" and "late".
+1. The `forecast` for when the next completion will be due is the sum of the last `completion` datetime and the `average` interval.
+2. The confidence we might have in this forecast depends upon the `spread`. If the `spread` is small, we would expect the actual interval between the last completion and the next completion to be close to the average. Chebyshev's Inequality says, in fact, that the proportion of intervals that lie within `σ × spread` of the average interval must be at least `1 - 1/σ^2`. In the screenshot `early` is `forecast - σ × spread` and `late` is `forecast + σ × spread` where, by default, `σ = 2`. With this setting at least 75% of the intervals would put the actual outcome between `early` and `late`.
 
 The main, list view reflects theses calculations. Here is a screenshot again showing the bird feeder example:
 
@@ -54,3 +55,5 @@ would record a completion for 3pm today. You could also, optionally, append a ti
       > the name of my tracker, 3p, +12d
 
 would not only record a completion for 3pm today but also establish 12 days as the expected interval until the next completion will be needed.
+
+###
