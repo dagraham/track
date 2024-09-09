@@ -73,13 +73,13 @@ settings_map = CommentedMap({
     'ampm': True,
     'yearfirst': True,
     'dayfirst': False,
-    'σ': 2
+    'η': 2
 })
 # Add comments to the dictionary
 settings_map.yaml_set_comment_before_after_key('ampm', before='Track Settings\n\n[ampm] Display 12-hour times with AM or PM if true, \notherwise display 24-hour times')
 settings_map.yaml_set_comment_before_after_key('yearfirst', before='\n[yearfirst] When parsing ambiguous dates, assume the year is first if true, \notherwise assume the month is first')
 settings_map.yaml_set_comment_before_after_key('dayfirst', before='\n[dayfirst] When parsing ambiguous dates, assume the day is first if true, \notherwise assume the month is first')
-settings_map.yaml_set_comment_before_after_key('σ', before='\n[σ] Use this integer multiple of "spread" for setting the early-to-late \nforecast confidence interval')
+settings_map.yaml_set_comment_before_after_key('η', before='\n[η] Use this integer multiple of "spread" for setting the early-to-late \nforecast confidence interval')
 
 
 tracker_manager = None
@@ -96,6 +96,8 @@ ZWNJ = '\u200C'
 # For showing active page in pages, e.g.,  ○ ○ ⏺ ○ = page 3 of 4 pages
 OPEN_CIRCLE = '○'
 CLOSED_CIRCLE = '⏺'
+# num_sigma = 'η'
+
 
 def page_banner(active_page_num: int, number_of_pages: int):
     markers = []
@@ -676,8 +678,8 @@ class Tracker(Persistent):
                         total += interval - result['average_interval']
                 result['spread'] = total / result['num_intervals']
             if result['num_intervals'] >= 1:
-                result['early'] = result['next_expected_completion'] - tracker_manager.settings['σ'] * result['spread']
-                result['late'] = result['next_expected_completion'] + tracker_manager.settings['σ'] * result['spread']
+                result['early'] = result['next_expected_completion'] - tracker_manager.settings['η'] * result['spread']
+                result['late'] = result['next_expected_completion'] + tracker_manager.settings['η'] * result['spread']
 
         self._info = result
         self._p_changed = True
@@ -961,13 +963,13 @@ class TrackerManager:
         name_width = shutil.get_terminal_size()[0] - 30
         num_pages = (len(self.trackers) + 25) // 26
         set_pages(page_banner(self.active_page + 1, num_pages))
-        banner = f"{ZWNJ} tag   forecast  σ spread   latest   name\n"
+        banner = f"{ZWNJ} tag   forecast  η spread   latest   name\n"
         rows = []
         count = 0
         start_index = self.active_page * 26
         end_index = start_index + 26
         sorted_trackers = self.get_sorted_trackers()
-        sigma = self.settings.get('σ', 1)
+        sigma = self.settings.get('η', 1)
         for tracker in sorted_trackers[start_index:end_index]:
             parts = [x.strip() for x in tracker.name.split('@')]
             tracker_name = parts[0]
@@ -1576,6 +1578,17 @@ def get_selection(event):
         set_mode('menu')
         list_trackers()
 
+@kb.add('c-p')
+def save_to_file(event):
+    # Access the content of the TextArea
+    content = display_area.text
+    file = os.path.join(track_home, 'display_area.txt')
+
+    # Write the content to a file
+    with open(file, "w") as f:
+        f.write(content)
+    display_message(f"Content saved to {file}.", 'info')
+
 @kb.add('f1')
 def menu(event=None):
     """Focus menu."""
@@ -1790,8 +1803,13 @@ def add_example_trackers(*event):
     lm = TextLorem(srange=(2,3))
     import random
     today = datetime.now().replace(microsecond=0,second=0,minute=0,hour=0)
-    for i in range(1,49):
-        doc_id =tracker_manager.add_tracker(f"# {lm.sentence()[:-1]}") # remove period at end and record for doc_id i+1
+    for i in range(1,49): # create 48 trackers
+        name = f"# {lm.sentence()[:-1]}"
+        doc_id = 1000 + i # make sure id's don't conflict with existing trackers
+        tracker = Tracker(name, doc_id)
+        # Add the tracker to the trackers dictionary
+        tracker_manager.trackers[doc_id] = tracker
+        # doc_id =tracker_manager.add_tracker(f"# {lm.sentence()[:-1]}") # remove period at end and record for doc_id i+1
         num_completions = random.choice(range(0,9,2))
         days = random.choice(range(1,12))
         offset = timedelta(minutes=-720*days)
@@ -2228,22 +2246,22 @@ root_container = MenuContainer(
             ]
         ),
         MenuItem(
+            'view',
+            children=[
+                MenuItem('i) inspect tracker', handler=inspect_tracker),
+                MenuItem('l) list trackers', handler=list_trackers),
+                MenuItem('s) sort trackers', handler=lambda: dialog_sort.start_dialog(None)),
+                MenuItem('t) move to tag', handler=select_tag),
+            ]
+        ),
+        MenuItem(
             'edit',
             children=[
-                MenuItem('n) add new tracker', handler=lambda: dialog_new.start_dialog(None)),
+                MenuItem('n) create new tracker', handler=lambda: dialog_new.start_dialog(None)),
                 MenuItem('c) add completion', handler=lambda: dialog_complete.start_dialog(None)),
                 MenuItem('d) delete tracker', handler=lambda: dialog_delete.start_dialog(None)),
                 MenuItem('e) edit history', handler=lambda: dialog_edit.start_dialog(None)),
                 MenuItem('r) rename tracker', handler=lambda: dialog_rename.start_dialog(None)),
-            ]
-        ),
-        MenuItem(
-            'view',
-            children=[
-                MenuItem('i) tracker info', handler=inspect_tracker),
-                MenuItem('l) list trackers', handler=list_trackers),
-                MenuItem('s) sort', handler=lambda: dialog_sort.start_dialog(None)),
-                MenuItem('t) select tag', handler=select_tag),
             ]
         ),
     ]
