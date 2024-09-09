@@ -1907,7 +1907,7 @@ def process_tracker(event, tracker: Tracker = None):
             dialog_visible[0] = True
             input_visible[0] = True
             app.layout.focus(input_area)
-            input_area.accept_handler = lambda buffer: handle_completion()
+            input_area.accept_handler = lambda buffer: self.handle_completion()
         elif action[0] == "info":
             select_mode[0] = False
             dialog_visible[0] = False
