@@ -60,7 +60,7 @@ would not only record a completion for 3pm today but also provide 12 days as an 
 
 #### Data, Backup and Restore
 
-Track stores its data in a ZOBD database.  The data itself is a python dictionary with integer doc_id's as keys and a dictionaries as values. These dictionaries contain entries for the tracker name and the history of completions and internals for the intervals and other computed values.  An additional dictionary containing user settings is also stored in the ZOBD datastore.
+Track stores its data in a ZOBD database.  The data itself is a python dictionary with integer doc_id's as keys and dictionaries as values. These dictionaries contain entries for the tracker name and the history of completions and internals for the intervals and other computed values.  An additional dictionary containing user settings is also stored in the ZOBD datastore.
 
 The ZOBD datastore transparently stores these python objects as 'pickled' versions of the objects themselves, using two files called 'track.fs' and 'track.fs.index'. Track keeps a daily, rotating back up of these two files in a zip format. While the backups are created daily, only 6 zip files are kept which include the most recent 3 days and 3 more of varying ages. Here is an illustrative simulation of the daily backups that would be kept as of October 30, 2024:
 
