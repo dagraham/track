@@ -121,7 +121,7 @@ def backup_to_zip(track_home, today):
 
     for file in files_to_backup:
         if not os.path.exists(file):
-            return (False, f"Cancelled - {file} does not exist")
+            return (False, f"Backup skipped - {file} does not exist")
 
     if today == 'remove':
         files_to_backup +=  [os.path.join(track_home, 'track.fs.tmp'), os.path.join(track_home, 'track.fs.lock')]
@@ -130,7 +130,7 @@ def backup_to_zip(track_home, today):
         # files_to_backup = [os.path.join(track_home, 'track.fs'), os.path.join(track_home, 'track.fs.index')]
         backup_zip = os.path.join(track_home, 'backup', f"{last_modified_time.strftime('%y%m%d')}.zip")
         if os.path.exists(backup_zip):
-            return (False, f"Cancelled - backup already exists: {backup_zip}")
+            return (False, f"Backup skipped - backup file already exists: {backup_zip}")
 
     # print(f"backing up: {backup_dir = }, {files_to_backup = }, backup_zip = {backup_zip = }")
 
@@ -154,20 +154,19 @@ def rotate_backups(backup_dir):
     ok, msg = backup_to_zip(track_home, today)
     if not ok:
         logger.info(msg)
-        return
 
     # List all files in the backup directory
     pattern = re.compile(r'^\d{6}\.zip$')
     all_files = os.listdir(backup_dir)
     # Filter the files matching the regex pattern
-    files = [f for f in all_files if pattern.match(f)]
+    # files = [f for f in all_files if pattern.match(f)]
     names = [os.path.splitext(f)[0] for f in all_files if pattern.match(f)]
     queue = []
     gap = timedelta(days=14)
 
     names.sort()
+    remove = []
     for name in names:
-        remove = []
         queue.insert(0, name)
         if len(queue) > 7:
             pivot = queue[3]
@@ -182,6 +181,11 @@ def rotate_backups(backup_dir):
             if len(queue) > 7:
                 remove.extend(queue[7:])
                 queue = queue[:7]
+    if remove:
+        for name in remove:
+            file = os.path.join(backup_dir, f"{name}.zip")
+            os.remove(os.path.join(backup_dir, file))
+        logger.info(f"Removing backup: {', '.join(remove)}")
 
 def restore_from_zip(track_home):
     clear_screen()
