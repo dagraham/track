@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
-from track.__version__ import version
-from track.track import main
+from __version__ import version
+from track import main
 
 setup(
     name="track-dgraham",  # Replace with your app's name
