@@ -114,6 +114,10 @@ import zipfile
 def backup_to_zip(track_home, today):
     backup_dir = os.path.join(track_home, 'backup')
     files_to_backup = [os.path.join(track_home, 'track.fs'), os.path.join(track_home, 'track.fs.index')]
+    last_modified_timestamp = os.path.getmtime(files_to_backup[0])
+    # Convert the timestamp to a human-readable format
+    last_modified_time = datetime.fromtimestamp(last_modified_timestamp)
+
 
     for file in files_to_backup:
         if not os.path.exists(file):
@@ -124,7 +128,7 @@ def backup_to_zip(track_home, today):
         backup_zip = os.path.join(track_home, 'backup', f"removed.zip")
     else:
         # files_to_backup = [os.path.join(track_home, 'track.fs'), os.path.join(track_home, 'track.fs.index')]
-        backup_zip = os.path.join(track_home, 'backup', f"{today.strftime('%y%m%d')}.zip")
+        backup_zip = os.path.join(track_home, 'backup', f"{last_modified_time.strftime('%y%m%d')}.zip")
         if os.path.exists(backup_zip):
             return (False, f"Cancelled - backup already exists: {backup_zip}")
 
@@ -158,56 +162,27 @@ def rotate_backups(backup_dir):
     # Filter the files matching the regex pattern
     files = [f for f in all_files if pattern.match(f)]
     names = [os.path.splitext(f)[0] for f in all_files if pattern.match(f)]
-    daily = []
-    recent = []
-    medium = []
-    old = []
-    rlim = (today - timedelta(days=18)).strftime("%y%m%d")
-    mlim = (today - timedelta(days=32)).strftime("%y%m%d")
-    olim = (today - timedelta(days=46)).strftime("%y%m%d")
+    queue = []
+    gap = timedelta(days=14)
 
     names.sort()
     for name in names:
         remove = []
-        if name > rlim:
-            daily.append(name)
-        elif name > mlim:
-            recent.append(name)
-        elif name > olim:
-            medium.append(name)
-        else:
-            old.append(name)
-
-        if len(daily) > 3:
-            m = daily.pop(0)
-            recent.append(m)
-        if len(recent) > 1:
-            if recent[0] < rlim:
-                r = recent.pop(0)
-                medium.append(r)
+        queue.insert(0, name)
+        if len(queue) > 7:
+            pivot = queue[3]
+            older = queue[4]
+            pivot_dt = datetime.strptime(pivot, "%y%m%d")
+            pivot_gap = (pivot_dt - gap).strftime("%y%m%d")
+            if older < pivot_gap:
+                remove.append(queue.pop(-1))
             else:
-                r = recent.pop(-1)
-                remove.append(r)
-        if len(medium) > 1:
-            if medium[0] < mlim:
-                m = medium.pop(0)
-                old.append(m)
-            else:
-                m = medium.pop(-1)
-                remove.append(m)
-        if len(old) > 1:
-            if old[0] < olim:
-                o = old.pop(0)
-                remove.append(o)
+                remove.append(queue.pop(3))
 
-        for r in remove:
-            fp = os.path.join(backup_dir, f"{r}.zip")
-            if os.path.exists(fp):
-                os.remove(fp)
-                print(f"removed {fp}")
-                names.remove(r)
+            if len(queue) > 7:
+                remove.extend(queue[7:])
+                queue = queue[:7]
 
-# FIXME: just a first pass
 def restore_from_zip(track_home):
     clear_screen()
     backup_dir = os.path.join(track_home, 'backup')
@@ -618,7 +593,7 @@ class Tracker(Persistent):
         self.name = name
         self.history = []
         self.created = datetime.now()
-        self.modifed = self.created
+        self.modified = self.created
         logger.debug(f"Created tracker {self.name} ({self.doc_id})")
 
 
@@ -690,7 +665,7 @@ class Tracker(Persistent):
     # XXX: Just for reference
     def add_to_history(self, new_event):
         self.history.append(new_event)
-        self.modifed = datetime.now()
+        self.modified = datetime.now()
         self.invalidate_info()
         self._p_changed = True  # Mark object as changed in ZODB
 
@@ -718,14 +693,14 @@ class Tracker(Persistent):
 
         # Notify ZODB that this object has changed
         self.invalidate_info()
-        self.modifed = datetime.now()
+        self.modified = datetime.now()
         self._p_changed = True
         return True, f"recorded completion for ..."
 
     def rename(self, name: str):
         self.name = name
         self.invalidate_info()
-        self.modifed = datetime.now()
+        self.modified = datetime.now()
         self._p_changed = True
 
     def record_completions(self, completions: list[tuple[datetime, timedelta]]):
@@ -740,7 +715,7 @@ class Tracker(Persistent):
             self.history = self.history[-Tracker.max_history:]
         logger.debug(f"ending {self.history = }")
         self.invalidate_info()
-        self.modifed = datetime.now()
+        self.modified = datetime.now()
         self._p_changed = True
         return True, f"recorded completions for ..."
 
@@ -788,7 +763,7 @@ class Tracker(Persistent):
                 self.history = self.history[-self.max_history:]
 
             # Notify ZODB that this object has changed
-            self.modifed = datetime.now()
+            self.modified = datetime.now()
             self.update_tracker_info()
             self.invalidate_info()
             self._p_changed = True
@@ -812,7 +787,7 @@ class Tracker(Persistent):
  name:        {self.name}
  doc_id:      {self.doc_id}
  created:     {Tracker.format_dt(self.created)}
- modified:    {Tracker.format_dt(self.modifed)}
+ modified:    {Tracker.format_dt(self.modified)}
  completions: ({self._info['num_completions']})
     {history}
  intervals:   ({self._info['num_intervals']})
@@ -1728,74 +1703,6 @@ def close_dialog(*event):
     input_visible[0] = False
     app.layout.focus(display_area)
 
-@kb.add('i', filter=Condition(lambda: menu_mode[0]))
-def inspect_tracker(*event):
-    """Show tracker information"""
-    global done_keys, selected_id
-    tracker = get_tracker_from_row()
-    logger.debug(f"in tracker_info: {tracker = }")
-    action[0] = "info"
-    if tracker:
-        logger.debug("got tracker from row, calling process_tracker")
-        set_mode('menu')
-        display_message(tracker.get_tracker_info(), 'info')
-        app.layout.focus(display_area)
-        return
-        # message_control.text = key_msg
-    done_keys = tag_keys
-    message_control.text = wrap(f" {tag_msg} you would like to inspect", 0)
-    set_mode('select')
-
-    for key in tag_keys:
-        kb.add(key, filter=Condition(lambda: select_mode[0]), eager=True)(lambda event, key=key: handle_key_press(event, key))
-
-    def handle_key_press(event, key):
-        key_pressed = event.key_sequence[0].key
-        logger.debug(f"{tracker_manager.tag_to_row = }")
-        if key_pressed in done_keys:
-            set_mode('menu')
-            message_control.text = ""
-            if key_pressed == 'escape':
-                return
-
-            tag = (tracker_manager.active_page, key_pressed)
-            selected_id = tracker_manager.tag_to_id.get(tag)
-            tracker = tracker_manager.get_tracker_from_id(selected_id)
-            logger.debug(f"got id {selected_id} and tracker {tracker} from tag {tag}")
-            display_message(tracker.get_tracker_info(), 'info')
-            app.layout.focus(display_area)
-
-
-# @kb.add('n', filter=Condition(lambda: menu_mode[0]))
-# def new_tracker(*event):
-#     """Add a new tracker."""
-#     action[0] = "new"
-#     menu_mode[0] = False
-#     select_mode[0] = False
-#     dialog_visible[0] = True
-#     input_visible[0] = True
-#     message_control.text = wrap(" Enter the name for the new tracker. Append @ followed by an integer number of days to flag this tracker when this number of days has passed since the last completion.", 0)
-#     logger.debug(f"action: {action[0]} getting tracker name ...")
-#     app.layout.focus(input_area)
-
-#     input_area.accept_handler = lambda buffer: handle_input()
-
-#     @kb.add('c-s', filter=Condition(lambda: action[0]=="new"))
-#     def handle_input(event):
-#         """Handle input when Enter is pressed."""
-#         parts = [x.strip() for x in input_area.text.split()]
-#         tracker_name = parts[0]
-#         if tracker_name:
-#             logger.debug(f"got tracker name: {tracker_name}")
-#             tracker_manager.add_tracker(
-#                 name=tracker_name,
-#                 )
-#             input_area.text = ""
-#             list_trackers()
-#         else:
-#             message_control.text = "No tracker name provided."
-#             list_trackers()
-
 @kb.add('c-e')
 def add_example_trackers(*event):
     import lorem
@@ -1832,16 +1739,6 @@ def del_example_trackers(*event):
     list_trackers()
 
 
-# @kb.add('e', filter=Condition(lambda: menu_mode[0]))
-# def edit_history(*event):
-#     """Edit a tracker history."""
-#     action[0] = "edit"
-#     menu_mode[0] = False
-#     select_mode[0] = True
-#     dialog_visible[0] = True
-#     input_visible[0] = False
-#     message_control.text = wrap(f" {tag_msg} you would like to edit", 0)
-
 def rename_tracker(*event):
     action[0] = "rename"
     menu_mode[0] = False
@@ -1869,57 +1766,6 @@ def select_tracker_from_label(event, key: str):
             display_area.buffer.document.translate_row_col_to_index(row, 0)
         )
 
-confirmation = False
-confirm_command = None
-def process_tracker(event, tracker: Tracker = None):
-    global selected_id, confirm_command
-    logger.debug("in process_tracker")
-    if tracker:
-        logger.debug("   with tracker")
-        selected_id = tracker.doc_id
-        logger.debug(f"{action[0] = }; {selected_id = }")
-        if action[0] == "edit":
-            message_control.text = f"Editing tracker {tracker.name} ({selected_id})"
-            dialog_visible[0] = True
-            select_mode[0] = False
-            input_visible[0] = True
-            app.layout.focus(input_area)
-        elif action[0] == "delete":
-            if input_area.text == "n":
-                list_trackers()
-                return
-            select_mode[0] = False
-            dialog_visible[0] = True
-            input_visible[0] = False
-            tracker_manager.delete_tracker(selected_id)
-            list_trackers()
-            # confirmation = get_confirmation(message=message)
-            # logger.debug(f"got confirmation: {confirmation = }")
-            # if confirmation == True:
-            #     tracker_manager.delete_tracker(selected_id)
-            # else:
-            #     display_area.text = "Deletion cancelled."
-
-        elif action[0] == "complete":
-            message_control.text = f"Enter the new completion datetime for {tracker.name} ({selected_id})"
-            # logger.debug(f"Entering the new completion datetime for {tracker.name} ({selected_id})")
-            select_mode[0] = False
-            dialog_visible[0] = True
-            input_visible[0] = True
-            app.layout.focus(input_area)
-            input_area.accept_handler = lambda buffer: self.handle_completion()
-        elif action[0] == "info":
-            select_mode[0] = False
-            dialog_visible[0] = False
-            input_visible[0] = False
-            # info = tracker.get_tracker_info()
-            # logger.debug(f"{info = }")
-            display_message(tracker.get_tracker_info(), 'info')
-            app.layout.focus(display_area)
-        app.invalidate()
-    else:
-        list_trackers()
-
 class Dialog:
     def __init__(self, action_type, kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap):
         self.action_type = action_type
@@ -1943,7 +1789,7 @@ class Dialog:
     def start_dialog(self, event):
         logger.debug(f"starting dialog for action {self.action_type}")
         if self.action_type in [
-            "complete", "delete", "edit", "rename"
+            "complete", "delete", "edit", "rename", "inspect"
             ]:
             tracker = get_tracker_from_row()
             action[0] = self.action_type
@@ -1995,6 +1841,12 @@ class Dialog:
             self.kb.add('enter')(self.handle_rename)
             # self.kb.add('c-s')(self.handle_rename)
             self.kb.add('c-c', eager=True)(self.handle_cancel)
+
+        elif self.action_type == "inspect":
+            set_mode('menu')
+            tracker = tracker_manager.get_tracker_from_id(self.selected_id)
+            display_message(tracker.get_tracker_info(), 'info')
+            app.layout.focus(display_area)
 
         elif self.action_type == "settings":
             self.message_control.text = " Edit settings. \nPress 'enter' to save changes or '^c' to cancel"
@@ -2211,6 +2063,9 @@ kb.add('e', filter=Condition(lambda: menu_mode[0]))(dialog_edit.start_dialog)
 dialog_rename = Dialog("rename", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('r', filter=Condition(lambda: menu_mode[0]))(dialog_rename.start_dialog)
 
+dialog_inspect = Dialog("inspect", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
+kb.add('i', filter=Condition(lambda: menu_mode[0]))(dialog_inspect.start_dialog)
+
 dialog_settings = Dialog("settings", kb, tag_keys, bool_keys, tracker_manager, message_control, display_area, wrap)
 kb.add('f4', filter=Condition(lambda: menu_mode[0]))(dialog_settings.start_dialog)
 
@@ -2248,10 +2103,10 @@ root_container = MenuContainer(
         MenuItem(
             'view',
             children=[
-                MenuItem('i) inspect tracker', handler=inspect_tracker),
+                MenuItem('i) inspect tracker', handler=lambda: dialog_inspect.start_dialog(None)),
                 MenuItem('l) list trackers', handler=list_trackers),
                 MenuItem('s) sort trackers', handler=lambda: dialog_sort.start_dialog(None)),
-                MenuItem('t) move to tag', handler=select_tag),
+                MenuItem('t) select row from tag', handler=select_tag),
             ]
         ),
         MenuItem(
@@ -2274,7 +2129,7 @@ app = Application(layout=layout, key_bindings=kb, full_screen=True, mouse_suppor
 
 app.layout.focus(root_container.body)
 
-for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort, dialog_rename, dialog_settings]:
+for dialog in [dialog_new, dialog_complete, dialog_delete, dialog_edit, dialog_sort, dialog_rename, dialog_inspect, dialog_settings]:
     dialog.set_app(app)
 
 # dialog_new.set_app(app)
@@ -2285,7 +2140,6 @@ def main():
     # global tracker_manager
     try:
         logger.info(f"Started TrackerManager with database file {db_file}")
-
         display_text = tracker_manager.list_trackers()
         display_message(display_text)
         start_periodic_checks()  # Start the periodic checks
