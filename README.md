@@ -31,16 +31,22 @@ Here is a part of a screenshot from the "inspect" display for the "fill bird fee
 
 Note that the first interval, `8 days 1 hour`, is the difference between `240808T1400 + 1 day` and `240808T1300`.  The other intervals are computed in the same way. The `average` interval is just the sum of the three intervals divided by 3. The little upward pointing arrow after the average interval indicates that, since the last interval is greater than the average, the average is increasing.
 
-The spread is the average of the absolute values of the differences between the intervals and the average interval. This *MAD* (mean average deviation) is a standard measure of the spread of a series. These calculations are used in two ways:
+The `spread` is the average of the absolute values of the differences between the intervals and the average interval. This *MAD* (mean average deviation) is a standard measure of the spread of a series. These calculations are used in two ways:
 
 1. The `forecast` for when the next completion will be due is the sum of the last `completion` datetime and the `average` interval.
-2. The confidence we might have in this forecast depends upon the `spread`. If the `spread` is small, we would expect the actual interval between the last completion and the next completion to be close to the average. Chebyshev's Inequality says, in fact, that the proportion of intervals that lie within `η × spread` of the average interval must be at least `1 - 1/η²`. In the screenshot `early` is `forecast - η × spread` and `late` is `forecast + η × spread` where, by default, `η = 2`. With this setting at least 75% of the intervals would put the actual outcome between `early` and `late`.
+2. The confidence we might have in this forecast depends upon the `spread`. If the `spread` is small, we would expect the actual interval between the last completion and the next completion to be close to the average. Chebyshev's Inequality says, in fact, that the proportion of intervals that lie within `η × spread` of the average interval must be at least `1 - 1/η²`. These are the settings for `early` and `late`:
+
+      `early = forecast - η × spread`
+
+      `late = forecast + η × spread`
+
+where, by default, `η = 2`. With these settings at least 75% of the intervals would put the actual outcome between `early` and `late`.
 
 The list view reflects theses calculations:
 
 ![list view](tracker_list.png)
 
-Since it is currently 12:16pm on September 9 and this is past "late" for the bird feeders, the display shows the bird feeder tracker in a suspiciously-late color, burnt orange. By comparison, early and late datetimes for "between early and late" are September 9 minus or plus 2 days.  Since the current time lies within this interval, "between early and late" gets an anytime-now color, gold. Finally, since early for "before early" is 12pm September 12 which is past the current time, "before early" gets a not-yet color, blue. There is no forecast for the last two trackers since neither have the two or more completions which arerequired for an interval on which to base a forecast, so these get trackers get the the no-forecast color, white.
+Since it is currently 12:16pm on September 9 and this is past `late` for the bird feeders, the display shows the bird feeder tracker in a suspiciously-late color, burnt orange. By comparison, `early` and `late` datetimes for "between early and late" are September 9 minus or plus 2 days.  Since the current time lies within this interval, "between early and late" gets an anytime-now color, gold. Finally, since `early` for "before early" is 12pm September 12 which is past the current time, "before early" gets a not-yet color, blue. There is no forecast for the last two trackers since neither have the two or more completions which arerequired for an interval on which to base a forecast, so these get trackers get the the no-forecast color, white.
 
 By default, trackers are sorted in reverse order by their "forecast" datetimes, since this is the order in which they will likely need to be completed, and colors them by likely urgency. It is also possible to sort trackers by "latest", "name" or "doc_id" (creation order).
 
