@@ -46,7 +46,7 @@ extension_options = {
 # print(version, pre, post, ext)
 
 new_ext = f'{pre}{ext}{ext_num}'
-# print(pre)
+# print(pre)/setup
 major, minor, patch = pre.split('.')
 # print(major, minor, patch)
 b_patch = '.'.join([major, minor, str(int(patch) + 1)])

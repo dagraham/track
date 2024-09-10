@@ -1,0 +1,4 @@
+Recent tagged changes as of 2024-09-10 11:41:31.693725:
+- 0 seconds ago (HEAD -> working, tag: 0.0.1) Daniel Graham
+    88230de 2024-09-10 11:41:31 -0400
+    Tagged version 0.0.1. initial release

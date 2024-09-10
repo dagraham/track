@@ -1,5 +1,6 @@
 from setuptools import setup, find_packages
-from __version__ import version
+from track.__version__ import version
+from track.track import main
 
 setup(
     name="track-dgraham",  # Replace with your app's name
@@ -25,7 +26,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'track_app=track:main',  # Replace `main` with the main function to run
+            'track=main',  # Replace `main` with the main function to run
         ],
     },
 )

@@ -260,6 +260,7 @@ def setup_logging():
             sys.argv.pop(1)
         except ValueError:
             print(f"Invalid log level: {sys.argv[1]}. Using default INFO level.")
+            log_level = logging.INFO
 
     envhome = os.environ.get('TRACKHOME')
     if len(sys.argv) > 1:
